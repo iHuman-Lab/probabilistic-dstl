@@ -40,10 +40,10 @@ class ProbabilisticSTLPlanner:
         self.cfg = {
             "w_u": 0.1,  # Control effort weight
             "w_du": 0.1,  # Smoothness weight (delta u)
-            "w_phi": 100.0,  # STL Satisfaction weight
+            "w_phi": 10.0,  # STL Satisfaction weight
             "lr": 0.05,  # Learning rate
             "max_iters": 500,  # K iterations
-            "alpha": 0.95,  # Satisfaction threshold for early stop
+            "alpha": 0.85,  # Satisfaction threshold for early stop
             "w_dist": 5.0,  # Goal guidance heuristic weight
             "w_obs": 5.0,  # Obstacle repulsion heuristic weight
             "loss_tol": 1e-4,  # Tolerance for loss convergence
@@ -149,7 +149,7 @@ class ProbabilisticSTLPlanner:
 
             # 3. STL Satisfaction: (1 - P_all)^2
             # Using Squared Error as per PDF (provides gradient towards 1.0)
-            loss_phi = (1.0 - p_all) ** 2
+            loss_phi = -torch.log(p_all + 0.0001)
 
             # 4. Goal Guidance Heuristic
             # Adds a gradient signal when the robot is far from the goal (P_all ~ 0)
@@ -192,8 +192,8 @@ class ProbabilisticSTLPlanner:
                 self.cfg["w_u"] * loss_u
                 + self.cfg["w_du"] * loss_du
                 + self.cfg["w_phi"] * loss_phi
-                + self.cfg["w_dist"] * (1.0 - p_all.detach()) * loss_dist
-                + self.cfg["w_obs"] * (1.0 - p_all.detach()) * loss_obs
+                + self.cfg["w_dist"] * loss_dist
+                + self.cfg["w_obs"] * loss_obs
             )
 
             # --- E. Update ---
@@ -219,7 +219,7 @@ class ProbabilisticSTLPlanner:
             # Convergence Check
             if current_p >= self.cfg["alpha"]:
                 converged_iters += 1
-                if converged_iters >= 200:
+                if converged_iters >= 10:
                     print(
                         f"Converged and held for {converged_iters} iterations. Stopping."
                     )
@@ -228,14 +228,14 @@ class ProbabilisticSTLPlanner:
                 converged_iters = 0  # Reset if satisfaction drops
 
             # Loss Convergence Check (Gradient is flat)
-            if abs(prev_loss - J.item()) < self.cfg.get("loss_tol", 1e-4):
+            if abs(prev_loss - J) < self.cfg.get("loss_tol", 1e-4):
                 # Only stop if we are NOT satisfied yet (stuck in local minima)
                 # If we are satisfied, we want to keep running to prove stability
                 if current_p < self.cfg["alpha"]:
                     if verbose and k > 10:  # Ensure minimum iters
                         print(f"Loss converged at iter {k}. Stopping.")
                     break
-            prev_loss = J.item()
+            prev_loss = J
 
             if verbose and k % 50 == 0:
                 print(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f}")

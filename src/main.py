@@ -139,11 +139,11 @@ with skip_run("skip", "Example 3: Piecewise") as check, check():
 # =============================================================================
 
 with skip_run("run", "Example 3: Single Shot Motion Planning") as check, check():
-    if __name__ == "__main__":
-        run_single_shot(max_iterations=2000)
+    run_single_shot(max_iterations=2000)
+
+
 # =============================================================================
 # EXAMPLE 4: MPC Receding Horizon Motion Planning
 # =============================================================================
 with skip_run("skip", "Example 4: MPC Receding Horizon") as check, check():
-    if __name__ == "__main__":
-        run_mpc()
+    run_mpc()
