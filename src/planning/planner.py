@@ -27,7 +27,7 @@ class TorchGaussianBelief(Belief):
 
 class ProbabilisticSTLPlanner:
     """
-    Implements the Gradient-Based Motion Planning Algorithm (Alg 1 in PDF).
+    Implements the Gradient-Based Motion Planning Algorithm.
     """
 
     def __init__(self, dynamics, environment, T, config=None):
@@ -36,22 +36,23 @@ class ProbabilisticSTLPlanner:
         self.T = T
         self.device = dynamics.device
 
-        # Optimization Weights (Default values based on PDF/Experience)
+        # Optimization Weights
         self.cfg = {
             "w_u": 0.1,  # Control effort weight
             "w_du": 0.1,  # Smoothness weight (delta u)
             "w_phi": 10.0,  # STL Satisfaction weight
             "lr": 0.05,  # Learning rate
             "max_iters": 500,  # K iterations
-            "alpha": 0.85,  # Satisfaction threshold for early stop
+            "alpha": 0.95,  # Satisfaction threshold for early stop
             "w_dist": 5.0,  # Goal guidance heuristic weight
             "w_obs": 5.0,  # Obstacle repulsion heuristic weight
+            "w_visit": 5.0,  # Visit region heuristic weight
             "loss_tol": 1e-4,  # Tolerance for loss convergence
         }
         if config:
             self.cfg.update(config)
 
-    def solve(self, x0_mean, x0_cov, render=False, verbose=True):
+    def solve(self, x0_mean, x0_cov, render=False, verbose=True, spec=None):
         """
         Executes the optimization loop to find optimal controls V.
         """
@@ -66,7 +67,10 @@ class ProbabilisticSTLPlanner:
         optimizer = optim.Adam([v_params], lr=self.cfg["lr"])
 
         # Get the STL formula from the environment
-        phi = self.env.get_specification(self.T)
+        if spec is not None:
+            phi = spec
+        else:
+            phi = self.env.get_specification(self.T)
 
         best_u = None
         best_p = -1.0
@@ -186,6 +190,21 @@ class ProbabilisticSTLPlanner:
                 dists = torch.norm(mean_trace[:, :, :2] - center, dim=2)
                 loss_obs = loss_obs + torch.sum(torch.relu(radius - dists) ** 2)
 
+            # 6. Visit Region  Heuristic
+            # Pulls the trajectory towards visit regions (minimizing min_dist over time)
+            loss_visit = torch.tensor(0.0, device=self.device)
+            for region in self.env.visit_regions:
+                vx = (region["x"][0] + region["x"][1]) / 2.0
+                vy = (region["y"][0] + region["y"][1]) / 2.0
+                v_center = torch.tensor([[vx, vy]], device=self.device)
+
+                # Squared Euclidean distance at each time step
+                dists_sq = torch.sum((mean_trace[:, :, :2] - v_center) ** 2, dim=2)
+
+                # We satisfy "Eventually" by minimizing the distance at the closest time step
+                min_dist_sq, _ = torch.min(dists_sq, dim=1)
+                loss_visit = loss_visit + torch.sum(min_dist_sq)
+
             # Total Loss
             # Scale heuristic by dissatisfaction so it fades when satisfied
             J = (
@@ -194,6 +213,7 @@ class ProbabilisticSTLPlanner:
                 + self.cfg["w_phi"] * loss_phi
                 + self.cfg["w_dist"] * loss_dist
                 + self.cfg["w_obs"] * loss_obs
+                + self.cfg["w_visit"] * loss_visit
             )
 
             # --- E. Update ---
@@ -219,9 +239,9 @@ class ProbabilisticSTLPlanner:
             # Convergence Check
             if current_p >= self.cfg["alpha"]:
                 converged_iters += 1
-                if converged_iters >= 10:
+                if converged_iters >= 50:
                     print(
-                        f"Converged and held for {converged_iters} iterations. Stopping."
+                        f"Converged and held for {converged_iters} iterations. Final P(Sat): {current_p:.4f}. Stopping."
                     )
                     break
             else:
@@ -229,16 +249,13 @@ class ProbabilisticSTLPlanner:
 
             # Loss Convergence Check (Gradient is flat)
             if abs(prev_loss - J) < self.cfg.get("loss_tol", 1e-4):
-                # Only stop if we are NOT satisfied yet (stuck in local minima)
-                # If we are satisfied, we want to keep running to prove stability
-                if current_p < self.cfg["alpha"]:
-                    if verbose and k > 10:  # Ensure minimum iters
-                        print(f"Loss converged at iter {k}. Stopping.")
-                    break
+                if verbose and k > 10:  # Ensure minimum iters
+                    print(f"Loss converged at iter {k}. Stopping.")
+                break
             prev_loss = J
 
             if verbose and k % 50 == 0:
-                print(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f}")
+                print(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f} | Best: {best_p:.4f}")
 
         if render:
             plt.ioff()

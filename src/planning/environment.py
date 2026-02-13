@@ -11,6 +11,7 @@ class Environment:
     def __init__(self, device="cpu"):
         self.obstacles = []
         self.circle_obstacles = []
+        self.visit_regions = []
         self.goal = None
         self.bounds = None
         self.device = device
@@ -32,11 +33,42 @@ class Environment:
         """
         self.circle_obstacles.append({"center": center, "radius": radius})
 
+    def add_visit_region(self, x_range, y_range):
+        """
+        Adds a rectangular region that must be visited at some point.
+        """
+        self.visit_regions.append({"x": x_range, "y": y_range})
+
     def set_goal(self, x_range, y_range):
         """
         Sets the goal region G = [x_g_min, x_g_max] x [y_g_min, y_g_max].
         """
         self.goal = {"x": x_range, "y": y_range}
+
+    def get_predicates(self):
+        """
+        get_predicates Function
+        Returns:
+        """
+        """
+        Returns a dictionary of predicates for custom formula construction.
+        """
+        preds = {"obstacles": [], "visit": [], "goal": None}
+
+        if self.goal:
+            preds["goal"] = RectangularGoalPredicate(self.goal)
+
+        for region in self.visit_regions:
+            preds["visit"].append(RectangularGoalPredicate(region))
+
+        if self.obstacles or self.circle_obstacles:
+            obs_preds = [RectangularObstaclePredicate(obs) for obs in self.obstacles]
+            obs_preds.extend(
+                [CircularObstaclePredicate(obs, device=self.device) for obs in self.circle_obstacles]
+            )
+            preds["obstacles"] = obs_preds
+
+        return preds
 
     def get_specification(self, T, t_goal_start=0):
         """
@@ -49,45 +81,35 @@ class Environment:
         Returns:
             STL_Formula: The combined specification
         """
-        if self.goal is None:
-            raise ValueError(
-                "Goal region must be defined before generating specification."
-            )
+        preds = self.get_predicates()
+        specs = []
 
         # 1. Goal Specification (Liveness)
-        # phi_goal = Eventually_[t_g, T] ( Inside_Goal )
-        goal_pred = RectangularGoalPredicate(self.goal)
-        phi_reach = Eventually(goal_pred, interval=[t_goal_start, T])
+        if preds["goal"]:
+            specs.append(Eventually(preds["goal"], interval=[t_goal_start, T]))
 
-        # 2. Obstacle Specification (Safety)
-        # phi_safe = Always_[0, T] ( Safe_from_Obs1 & Safe_from_Obs2 ... )
-        # Safety is defined as avoiding ALL obstacles.
-        # We combine individual obstacle safety probabilities using logic.
+        # 2. Visit Regions (Liveness)
+        for visit_pred in preds["visit"]:
+            specs.append(Eventually(visit_pred, interval=[0, T]))
 
-        if not self.obstacles and not self.circle_obstacles:
-            # If no obstacles, safety is trivially True (probability 1.0)
-            # We return just the reach goal requirement
-            return phi_reach
+        # 3. Obstacle Specification (Safety)
+        if preds["obstacles"]:
+            obs_preds = preds["obstacles"]
+            current_safe_formula = obs_preds[0]
+            for i in range(1, len(obs_preds)):
+                current_safe_formula = And(current_safe_formula, obs_preds[i])
+            phi_safety = Always(current_safe_formula, interval=[0, T])
+            specs.append(phi_safety)
 
-        # Create a predicate for each obstacle
-        obs_preds = [RectangularObstaclePredicate(obs) for obs in self.obstacles]
-        circle_preds = [
-            CircularObstaclePredicate(obs, device=self.device)
-            for obs in self.circle_obstacles
-        ]
-        obs_preds.extend(circle_preds)
+        if not specs:
+            raise ValueError("No constraints defined in environment.")
 
-        # Combine them: Safe_Total = Safe_1 & Safe_2 & ... & Safe_N
-        # We use the And operator to aggregate safety constraints
-        current_safe_formula = obs_preds[0]
-        for i in range(1, len(obs_preds)):
-            current_safe_formula = And(current_safe_formula, obs_preds[i])
-
-        phi_safety = Always(current_safe_formula, interval=[0, T])
-
-        # 3. Combined Specification
-        # phi = phi_safe & phi_reach
-        return And(phi_safety, phi_reach)
+        # 4. Combined Specification
+        combined_spec = specs[0]
+        for i in range(1, len(specs)):
+            combined_spec = And(combined_spec, specs[i])
+            
+        return combined_spec
 
 
 # =============================================================================

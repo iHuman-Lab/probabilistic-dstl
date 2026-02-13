@@ -1,6 +1,7 @@
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from pdstl.operators import Always, Eventually, And
 from planning.environment import Environment
 from planning.dynamics import SingleIntegrator
 from planning.planner import ProbabilisticSTLPlanner
@@ -14,7 +15,7 @@ def run_single_shot(max_iterations=500):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    T = 100  # Time horizon
+    T = 120  # Time horizon
     dt = 0.2  # Time step size
 
     # --- 2. Setup Environment ---
@@ -22,30 +23,37 @@ def run_single_shot(max_iterations=500):
     env = Environment(device=device)
 
     # Scenario: Reach (3.5, 10.5)
-    env.set_goal(x_range=[3.0, 4.0], y_range=[10.0, 11.0])
+    env.set_goal(x_range=[4.0, 6.0], y_range=[9.0, 11.0])
 
-    # Add obstacles (Hardcoded as requested)
+    # Add a visit region (waypoint)
+    env.add_visit_region(x_range=[8.0, 10.0], y_range=[3.0, 8.0])
+
+    # Add obstacles 
     # 1. Rectangle obstacle
-    env.add_obstacle(x_range=[2.0, 5.0], y_range=[4.0, 6.0])
+    env.add_obstacle(x_range=[0.0, 2.0], y_range=[3.0, 8.0])
+    env.add_obstacle(x_range=[2.0, 6.0], y_range=[-1.0, 1.0])
+
 
     # 2. Circle obstacle
-    env.add_circle_obstacle(center=[8.0, 4.0], radius=0.5)
+    env.add_circle_obstacle(center=[5.0, 5.0], radius=2.5)
 
     # --- 3. Setup Dynamics ---
     # Using SingleIntegrator (Velocity Control) as per PDF
     dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.02, device=device)
+      
 
     # --- 4. Planner Config ---
     # Configuration for the gradient descent
     planner_cfg = {
         "w_u": 0.9,  # Weight on control effort
-        "w_du": 0.01,  # Weight on smoothness
+        "w_du": 0.05,  # Weight on smoothness
         "w_phi": 100.0,  # Weight on STL satisfaction
         "lr": 0.05,  # Learning rate
         "max_iters": max_iterations,  # Max iterations
         "alpha": 0.95,  # Success threshold
-        "w_dist": 3.0,  # Goal guidance heuristic weight
+        "w_dist": 4.0,  # Goal guidance heuristic weight
         "w_obs": 2.0,  # Obstacle repulsion heuristic weight
+        "w_visit": 4.0,  # Visit region heuristic weight
     }
     planner = ProbabilisticSTLPlanner(dynamics, env, T, config=planner_cfg)
 
@@ -63,14 +71,14 @@ def run_single_shot(max_iterations=500):
     )
 
     print("\nOptimization Complete.")
-    print("Final Satisfaction Probability: {best_p:.4f}")
+    print(f"Final Satisfaction Probability: {best_p:.4f}")
 
     # --- 7. Visualize ---
     # Pass results to the visualization module
     visualize_results(mean_trace, cov_trace, u_trace, env, history)
 
     # --- 8. Animate ---
-    # Step=2 to speed up animation slightly
+    
     animate_results(
         mean_trace, cov_trace, env, filename="single_shot_animation.gif", step=2
     )
@@ -85,18 +93,24 @@ def run_mpc():
     # MPC Parameters
     H = 100  # Sliding Window Horizon (Lookahead)
     MAX_STEPS = 300  # Safety limit, but we will use while loop
-    dt = 0.5  # Time step size
+    dt = 0.3  # Time step size
 
     # --- 2. Setup Environment ---
     # Define workspace, goal, and obstacles
     env = Environment(device=device)
 
-    # Scenario: Reach (8,8) while avoiding obstacle at (5,5)
-    env.set_goal(x_range=[3.0, 4.0], y_range=[10.0, 11.0])
+    # Scenario: Reach (3.5, 10.5)
+    env.set_goal(x_range=[9.0, 10.0], y_range=[9.0, 10.0])
+    
 
     # Add an obstacle between start and goal
-    env.add_obstacle(x_range=[0.0, 4], y_range=[2, 8.0])
+    env.add_obstacle(x_range=[0.0, 2.0], y_range=[3.0, 8.0])
+    env.add_obstacle(x_range=[2.0, 6.0], y_range=[-1.0, 1.0])
+    env.add_obstacle(x_range=[8.0, 10.0], y_range=[3.0, 8.0])
 
+
+    env.add_circle_obstacle(center=[5.0, 5.0], radius=2.0)
+    
     # --- 3. Setup Dynamics ---
     # Using SingleIntegrator (Velocity Control) as per PDF
     dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.02, device=device)
@@ -110,7 +124,7 @@ def run_mpc():
         "lr": 0.05,  # Learning rate
         "max_iters": 200,  # Fewer iters needed for MPC warm start (or short horizon)
         "alpha": 0.95,  # Success threshold
-        "w_dist": 3.0,  # Goal guidance heuristic weight
+        "w_dist": 4.0,  # Goal guidance heuristic weight
         "w_obs": 2.0,  # Obstacle repulsion heuristic weight
     }
 

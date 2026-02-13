@@ -103,7 +103,7 @@ class DoubleIntegrator(Dynamics):
       Sigma_{t+1} = A * Sigma_t * A^T + Q
     """
 
-    def __init__(self, dt=0.2, u_max=1.0, q_std=0.01, device="cpu"):
+    def __init__(self, dt=0.2, u_max=1.0, q_std=0.02, device="cpu"):
         super().__init__(dt, u_max, device)
 
         # State Transition Matrix A

@@ -5,7 +5,7 @@ from matplotlib.animation import FuncAnimation
 
 
 def animate_results(
-    mean_trace, cov_trace, env, filename="trajectory.gif", plan_traces=None, step=1
+    mean_trace, cov_trace, env, filename="trajectory.gif", plan_traces=None, step=1, dt=0.2
 ):
     """
     Animates the robot's trajectory with covariance ellipses.
@@ -17,6 +17,7 @@ def animate_results(
         filename: Output filename (e.g., 'trajectory.gif')
         plan_traces: List of Tensors (optional), each [Batch, Horizon, Dim] representing the sliding window plan at that step.
         step: Frame skip step size (default 1). Increase to speed up animation generation.
+        dt: Time step size (default 0.2)
     """
     # Convert tensors to numpy (ensure they are on CPU)
     # mean_trace shape: [1, T, 2] -> [T, 2]
@@ -46,6 +47,23 @@ def animate_results(
                 color="green",
                 alpha=0.3,
                 label="Goal",
+                zorder=5,
+            )
+        )
+
+    # Draw Visit Regions
+    for region in env.visit_regions:
+        vx = region["x"]
+        vy = region["y"]
+        ax.add_patch(
+            patches.Rectangle(
+                (vx[0], vy[0]),
+                vx[1] - vx[0],
+                vy[1] - vy[0],
+                color="yellow",
+                alpha=0.5,
+                label="Visit Region",
+                zorder=5,
             )
         )
 
@@ -61,21 +79,22 @@ def animate_results(
                 color="red",
                 alpha=0.5,
                 label="Obstacle",
+                zorder=5,
             )
         )
 
     # Draw Circle Obstacles
     for obs in env.circle_obstacles:
         c = patches.Circle(
-            obs["center"], obs["radius"], color="red", alpha=0.5, label="Obstacle"
+            obs["center"], obs["radius"], color="red", alpha=0.5, label="Obstacle", zorder=5
         )
         ax.add_patch(c)
 
     # Dynamic Elements
     # Robot position dot
-    (robot_dot,) = ax.plot([], [], "bo", markersize=8, label="Robot Mean")
+    (robot_dot,) = ax.plot([], [], "bo", markersize=8, label="Robot Mean", zorder=10)
     # Trajectory trail
-    (trail,) = ax.plot([], [], "b-", linewidth=1, alpha=0.5)
+    (trail,) = ax.plot([], [], "b-", linewidth=1, alpha=0.5, zorder=9)
     # Planned Sliding Window (Ghost)
     (plan_line,) = ax.plot(
         [],
@@ -89,7 +108,7 @@ def animate_results(
 
     # Covariance Ellipse (initially hidden)
     ellipse = patches.Ellipse(
-        (0, 0), width=0, height=0, angle=0, color="blue", alpha=0.4
+        (0, 0), width=0, height=0, angle=0, color="blue", alpha=0.3, zorder=8
     )
     ax.add_patch(ellipse)
 
@@ -148,7 +167,7 @@ def animate_results(
     # Use range(0, T, step) to skip frames for speed
     frames = range(0, T, step)
     ani = FuncAnimation(
-        fig, update, frames=frames, init_func=init, blit=True, interval=50
+        fig, update, frames=frames, init_func=init, blit=False, interval=50
     )
 
     # Save or Show

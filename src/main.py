@@ -1,3 +1,4 @@
+from asyncio import run
 import numpy as np
 import torch
 from models.dynamics import (
@@ -97,7 +98,7 @@ with skip_run("skip", "Example 1: Always") as check, check():
 # EXAMPLE 2: Discrete Piecewise Signal
 # =============================================================================
 
-with skip_run("skip", "Example 3: Piecewise") as check, check():
+with skip_run("run", "Example 3: Piecewise") as check, check():
     t, mean, var = piecewise_signal()
 
     print(f"\n{'=' * 50}")
@@ -138,8 +139,8 @@ with skip_run("skip", "Example 3: Piecewise") as check, check():
 # EXAMPLE 3: Single Shot Motion Planning
 # =============================================================================
 
-with skip_run("run", "Example 3: Single Shot Motion Planning") as check, check():
-    run_single_shot(max_iterations=2000)
+with skip_run("skip", "Example 3: Single Shot Motion Planning") as check, check():
+    run_single_shot(max_iterations=1000)
 
 
 # =============================================================================

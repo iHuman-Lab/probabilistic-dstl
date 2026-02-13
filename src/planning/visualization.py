@@ -72,6 +72,23 @@ def visualize_results(
                 color="green",
                 alpha=0.3,
                 label="Goal",
+                zorder=5,
+            )
+        )
+
+    # Draw Visit Regions
+    for region in env.visit_regions:
+        vx = region["x"]
+        vy = region["y"]
+        ax1.add_patch(
+            patches.Rectangle(
+                (vx[0], vy[0]),
+                vx[1] - vx[0],
+                vy[1] - vy[0],
+                color="yellow",
+                alpha=0.5,
+                label="Visit Region",
+                zorder=5,
             )
         )
 
@@ -87,13 +104,14 @@ def visualize_results(
                 color="red",
                 alpha=0.5,
                 label="Obstacle",
+                zorder=5,
             )
         )
 
     # Draw Circle Obstacles
     for obs in env.circle_obstacles:
         c = plt.Circle(
-            obs["center"], obs["radius"], color="red", alpha=0.5, label="Obstacle"
+            obs["center"], obs["radius"], color="red", alpha=0.5, label="Obstacle", zorder=5
         )
         ax1.add_patch(c)
 
