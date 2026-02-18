@@ -18,7 +18,6 @@ def skip_run(flag, f):
     Returns
     -------
     None
-
     """
 
     @contextmanager

@@ -11,6 +11,9 @@ class Environment:
     def __init__(self, device="cpu"):
         self.obstacles = []
         self.circle_obstacles = []
+        self.moving_obstacles = []
+        self.visit_regions = []
+        self.lane_markings = []
         self.goal = None
         self.bounds = None
         self.device = device
@@ -32,11 +35,58 @@ class Environment:
         """
         self.circle_obstacles.append({"center": center, "radius": radius})
 
+    def add_moving_obstacle(self, x_traj, y_traj, width, height):
+        """
+        Adds a moving rectangular obstacle.
+        x_traj, y_traj: Tensors or lists of center positions over time [T+1]
+        """
+        self.moving_obstacles.append({
+            "x_traj": x_traj,
+            "y_traj": y_traj,
+            "width": width,
+            "height": height
+        })
+
+    def add_lane_marking(self, x_range, y_pos, style="dashed", color="white"):
+        """
+        Adds a visual lane marking (line).
+        """
+        self.lane_markings.append({"x": x_range, "y": y_pos, "style": style, "color": color})
+
+    def add_visit_region(self, x_range, y_range):
+        """
+        Adds a rectangular region that must be visited at some point.
+        """
+        self.visit_regions.append({"x": x_range, "y": y_range})
+
     def set_goal(self, x_range, y_range):
         """
         Sets the goal region G = [x_g_min, x_g_max] x [y_g_min, y_g_max].
         """
         self.goal = {"x": x_range, "y": y_range}
+
+    def get_predicates(self):
+        """
+        """
+        preds = {"obstacles": [], "visit": [], "goal": None}
+
+        if self.goal:
+            preds["goal"] = RectangularGoalPredicate(self.goal)
+
+        for region in self.visit_regions:
+            preds["visit"].append(RectangularGoalPredicate(region))
+
+        if self.obstacles or self.circle_obstacles or self.moving_obstacles:
+            obs_preds = [RectangularObstaclePredicate(obs) for obs in self.obstacles]
+            obs_preds.extend(
+                [CircularObstaclePredicate(obs, device=self.device) for obs in self.circle_obstacles]
+            )
+            obs_preds.extend(
+                [MovingRectangularObstaclePredicate(obs, device=self.device) for obs in self.moving_obstacles]
+            )
+            preds["obstacles"] = obs_preds
+
+        return preds
 
     def get_specification(self, T, t_goal_start=0):
         """
@@ -49,45 +99,35 @@ class Environment:
         Returns:
             STL_Formula: The combined specification
         """
-        if self.goal is None:
-            raise ValueError(
-                "Goal region must be defined before generating specification."
-            )
+        preds = self.get_predicates()
+        specs = []
 
         # 1. Goal Specification (Liveness)
-        # phi_goal = Eventually_[t_g, T] ( Inside_Goal )
-        goal_pred = RectangularGoalPredicate(self.goal)
-        phi_reach = Eventually(goal_pred, interval=[t_goal_start, T])
+        if preds["goal"]:
+            specs.append(Eventually(preds["goal"], interval=[t_goal_start, T]))
 
-        # 2. Obstacle Specification (Safety)
-        # phi_safe = Always_[0, T] ( Safe_from_Obs1 & Safe_from_Obs2 ... )
-        # Safety is defined as avoiding ALL obstacles.
-        # We combine individual obstacle safety probabilities using logic.
+        # 2. Visit Regions (Liveness)
+        for visit_pred in preds["visit"]:
+            specs.append(Eventually(visit_pred, interval=[0, T]))
 
-        if not self.obstacles and not self.circle_obstacles:
-            # If no obstacles, safety is trivially True (probability 1.0)
-            # We return just the reach goal requirement
-            return phi_reach
+        # 3. Obstacle Specification (Safety)
+        if preds["obstacles"]:
+            obs_preds = preds["obstacles"]
+            current_safe_formula = obs_preds[0]
+            for i in range(1, len(obs_preds)):
+                current_safe_formula = And(current_safe_formula, obs_preds[i])
+            phi_safety = Always(current_safe_formula, interval=[0, T])
+            specs.append(phi_safety)
 
-        # Create a predicate for each obstacle
-        obs_preds = [RectangularObstaclePredicate(obs) for obs in self.obstacles]
-        circle_preds = [
-            CircularObstaclePredicate(obs, device=self.device)
-            for obs in self.circle_obstacles
-        ]
-        obs_preds.extend(circle_preds)
+        if not specs:
+            raise ValueError("No constraints defined in environment.")
 
-        # Combine them: Safe_Total = Safe_1 & Safe_2 & ... & Safe_N
-        # We use the And operator to aggregate safety constraints
-        current_safe_formula = obs_preds[0]
-        for i in range(1, len(obs_preds)):
-            current_safe_formula = And(current_safe_formula, obs_preds[i])
-
-        phi_safety = Always(current_safe_formula, interval=[0, T])
-
-        # 3. Combined Specification
-        # phi = phi_safe & phi_reach
-        return And(phi_safety, phi_reach)
+        # 4. Combined Specification
+        combined_spec = specs[0]
+        for i in range(1, len(specs)):
+            combined_spec = And(combined_spec, specs[i])
+            
+        return combined_spec
 
 
 # =============================================================================
@@ -118,11 +158,9 @@ class RectangularGoalPredicate(STL_Formula):
 
     def robustness_trace(self, belief_trajectory, **kwargs):
         # We process the entire trajectory at once
-        # belief_trajectory.mean shape: [Batch, Time, Dim]
-        # belief_trajectory.cov shape:  [Batch, Time, Dim, Dim] (or diagonal [Batch, Time, Dim])
 
         # 1. Extract Means and Variances
-        # We iterate over beliefs to extract full traces first
+        
         means = []
         vars_diag = []
 
@@ -130,7 +168,6 @@ class RectangularGoalPredicate(STL_Formula):
         # We extract the underlying tensors
         for belief in belief_trajectory:
             means.append(belief.mean_full)
-            # Extract diagonal variance (x and y are independent in axis-aligned checks)
             # If cov is full matrix [B, D, D], take diagonal. If [B, D], take as is.
             if belief.var_full.ndim > 2:
                 # Taking diagonal: [B, D]
@@ -166,7 +203,6 @@ class RectangularGoalPredicate(STL_Formula):
         p_goal, _ = torch.min(stacked_probs, dim=0)  # [Batch, Time]
 
         # 4. Format Output for Operators
-        # operators.py expects [Batch, Time, 2] (Lower, Upper)
         # Since we calculated exact probabilities (surrogates), Lower = Upper
         return torch.stack([p_goal, p_goal], dim=-1)
 
@@ -267,5 +303,54 @@ class CircularObstaclePredicate(STL_Formula):
 
         # P(safe) = P(actual_dist > radius) ~= 1 - CDF(radius | N(dist, sigma_proj))
         p_safe = 1.0 - normal_cdf(self.radius, dist, sigma_proj)
+
+        return torch.stack([p_safe, p_safe], dim=-1)
+
+
+class MovingRectangularObstaclePredicate(STL_Formula):
+    """
+    Probabilistic safety for a moving rectangular obstacle.
+    """
+
+    def __init__(self, obs_def, device="cpu"):
+        super().__init__()
+        # Trajectories are expected to be tensors of shape [T+1]
+        self.x_traj = torch.as_tensor(obs_def["x_traj"], device=device, dtype=torch.float32)
+        self.y_traj = torch.as_tensor(obs_def["y_traj"], device=device, dtype=torch.float32)
+        self.width = obs_def["width"]
+        self.height = obs_def["height"]
+
+    def robustness_trace(self, belief_trajectory, **kwargs):
+        means = []
+        vars_diag = []
+
+        for belief in belief_trajectory:
+            means.append(belief.mean_full)
+            if belief.var_full.ndim > 2:
+                diag = torch.diagonal(belief.var_full, dim1=-2, dim2=-1)
+                vars_diag.append(diag)
+            else:
+                vars_diag.append(belief.var_full)
+
+        mu = torch.stack(means, dim=1) # [Batch, Time, Dim]
+        var = torch.stack(vars_diag, dim=1)
+
+        mu_x, mu_y = mu[..., 0], mu[..., 1]
+        var_x, var_y = var[..., 0], var[..., 1]
+
+        # Expand obstacle bounds over time
+        x_min = self.x_traj - self.width / 2.0
+        x_max = self.x_traj + self.width / 2.0
+        y_min = self.y_traj - self.height / 2.0
+        y_max = self.y_traj + self.height / 2.0
+
+        # Compute Probabilities (Safe if Outside)
+        p_left = normal_cdf(x_min, mu_x, var_x)
+        p_right = 1.0 - normal_cdf(x_max, mu_x, var_x)
+        p_below = normal_cdf(y_min, mu_y, var_y)
+        p_above = 1.0 - normal_cdf(y_max, mu_y, var_y)
+
+        stacked_probs = torch.stack([p_left, p_right, p_below, p_above], dim=0)
+        p_safe, _ = torch.max(stacked_probs, dim=0)
 
         return torch.stack([p_safe, p_safe], dim=-1)

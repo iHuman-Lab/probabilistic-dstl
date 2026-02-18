@@ -22,6 +22,16 @@ class Dynamics(nn.Module):
         """
         return self.u_max * torch.tanh(v)
 
+    def step(self, x, P, u):
+        """
+        Propagates state x and covariance P one step forward with control u.
+        x: [Dim]
+        P: [Dim, Dim]
+        u: [Control Dim]
+        Returns: (x_next, P_next)
+        """
+        raise NotImplementedError
+
     def forward(self, v_sequence, x0_mean, x0_cov):
         raise NotImplementedError
 
@@ -31,11 +41,7 @@ class SingleIntegrator(Dynamics):
     Standard Position-Velocity model defined in the PDF.
 
     State:   [x, y]
-    Control: [vx, vy] (Direct velocity control)
-
-    Equations:
-      mu_{t+1}   = mu_t + u_t * dt
-      Sigma_{t+1} = Sigma_t + Q
+    Control: [vx, vy]
     """
 
     def __init__(self, dt=0.2, u_max=1.0, q_std=0.05, device="cpu"):
@@ -44,6 +50,11 @@ class SingleIntegrator(Dynamics):
         # Process Noise Covariance Q (Additive)
         # We assume diagonal noise for simplicity: Q = diag(q_std^2)
         self.Q = torch.eye(2, device=self.device) * q_std**2
+
+    def step(self, x, P, u):
+        # x_next = x + u * dt
+        # P_next = P + Q
+        return x + u * self.dt, P + self.Q
 
     def forward(self, v_sequence, x0_mean, x0_cov):
         """
@@ -69,15 +80,12 @@ class SingleIntegrator(Dynamics):
 
         for t in range(T):
             # 1. Squash the optimization variable to get physical control
-            #    u_t = u_max * tanh(v_t)
             u = self.bound_control(v_sequence[t])
 
             # 2. Update Mean (Differentiable)
-            #    mu_{t+1} = mu_t + u_t * dt
             curr_mu = curr_mu + u * self.dt
 
             # 3. Update Covariance (Open Loop Uncertainty Growth)
-            #    Sigma_{t+1} = Sigma_t + Q
             curr_sigma = curr_sigma + self.Q
 
             means.append(curr_mu)
@@ -97,13 +105,9 @@ class DoubleIntegrator(Dynamics):
 
     State:   [px, py, vx, vy]
     Control: [ax, ay]
-
-    Equations:
-      mu_{t+1}    = A * mu_t + B * u_t
-      Sigma_{t+1} = A * Sigma_t * A^T + Q
     """
 
-    def __init__(self, dt=0.2, u_max=1.0, q_std=0.01, device="cpu"):
+    def __init__(self, dt=0.2, u_max=1.0, q_std=0.02, device="cpu"):
         super().__init__(dt, u_max, device)
 
         # State Transition Matrix A
@@ -126,6 +130,13 @@ class DoubleIntegrator(Dynamics):
         # Process Noise Q
         self.Q = torch.eye(4, device=device) * q_std**2
 
+    def step(self, x, P, u):
+        # x_next = A x + B u
+        # P_next = A P A^T + Q
+        x_next = self.A @ x + self.B @ u
+        P_next = self.A @ P @ self.A.t() + self.Q
+        return x_next, P_next
+
     def forward(self, v_sequence, x0_mean, x0_cov):
         T = v_sequence.shape[0]
         means = [x0_mean]
@@ -142,7 +153,6 @@ class DoubleIntegrator(Dynamics):
             curr_mu = self.A @ curr_mu + self.B @ u
 
             # 3. Update Covariance (Full Linear Update)
-            #    Sigma_{t+1} = A * Sigma_t * A^T + Q
             curr_sigma = self.A @ curr_sigma @ self.A.t() + self.Q
 
             means.append(curr_mu)

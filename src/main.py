@@ -10,7 +10,7 @@ from pdstl.base import BeliefTrajectory
 from pdstl.operators import GreaterThan, Always
 from visualization.robustness import plot_stl_formula_bounds, plot_piecewise_stl
 from utils import skip_run
-from planning.runners import run_single_shot, run_mpc
+from planning.runners import run_single_shot, run_mpc, run_lane_change
 
 
 # HELPERS
@@ -139,7 +139,7 @@ with skip_run("skip", "Example 3: Piecewise") as check, check():
 # =============================================================================
 
 with skip_run("run", "Example 3: Single Shot Motion Planning") as check, check():
-    run_single_shot(max_iterations=2000)
+    run_single_shot(max_iterations=1000)
 
 
 # =============================================================================
@@ -147,3 +147,9 @@ with skip_run("run", "Example 3: Single Shot Motion Planning") as check, check()
 # =============================================================================
 with skip_run("skip", "Example 4: MPC Receding Horizon") as check, check():
     run_mpc()
+
+# =============================================================================
+# EXAMPLE 5: Lane Change with Moving Obstacle
+# =============================================================================
+with skip_run("skip", "Example 5: Lane Change") as check, check():
+    run_lane_change()

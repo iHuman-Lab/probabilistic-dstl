@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pdstl.base import BeliefTrajectory, Belief
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from pdstl.base import BeliefTrajectory, Belief
 
 
 class TorchGaussianBelief(Belief):
@@ -27,7 +27,7 @@ class TorchGaussianBelief(Belief):
 
 class ProbabilisticSTLPlanner:
     """
-    Implements the Gradient-Based Motion Planning Algorithm (Alg 1 in PDF).
+    Implements the Gradient-Based Motion Planning Algorithm.
     """
 
     def __init__(self, dynamics, environment, T, config=None):
@@ -36,37 +36,49 @@ class ProbabilisticSTLPlanner:
         self.T = T
         self.device = dynamics.device
 
-        # Optimization Weights (Default values based on PDF/Experience)
+        # Optimization Weights
         self.cfg = {
             "w_u": 0.1,  # Control effort weight
             "w_du": 0.1,  # Smoothness weight (delta u)
             "w_phi": 10.0,  # STL Satisfaction weight
             "lr": 0.05,  # Learning rate
             "max_iters": 500,  # K iterations
-            "alpha": 0.85,  # Satisfaction threshold for early stop
+            "alpha": 0.95,  # Satisfaction threshold for early stop
             "w_dist": 5.0,  # Goal guidance heuristic weight
             "w_obs": 5.0,  # Obstacle repulsion heuristic weight
+            "w_visit": 5.0,  # Visit region heuristic weight
             "loss_tol": 1e-4,  # Tolerance for loss convergence
         }
         if config:
             self.cfg.update(config)
 
-    def solve(self, x0_mean, x0_cov, render=False, verbose=True):
+    def solve(self, x0_mean, x0_cov, render=False, verbose=True, spec=None, init_guess=None):
         """
         Executes the optimization loop to find optimal controls V.
+        init_guess: Optional tensor [T, 2] of control inputs to warm-start the optimization.
         """
         # 1. Initialize Control Parameters V
-        # v is unconstrained; u = u_max * tanh(v)
-        # Initialize with small random noise to break symmetry
-        v_params = nn.Parameter(
-            torch.randn(self.T, 2, device=self.device) * 0.1, requires_grad=True
-        )
+        
+        if init_guess is not None:
+            # Inverse tanh to get v from u
+            # Clamp to avoid numerical instability at boundaries
+            u_norm = init_guess / (self.dyn.u_max + 1e-6)
+            u_norm = torch.clamp(u_norm, -0.99, 0.99)
+            v_init = 0.5 * torch.log((1 + u_norm) / (1 - u_norm))
+            v_params = nn.Parameter(v_init.to(self.device), requires_grad=True)
+        else:
+            # Initialize with small random noise to break symmetry
+            # Bias slightly forward (x-direction) to encourage movement
+            v_params = nn.Parameter(torch.randn(self.T, 2, device=self.device) * 0.1 + torch.tensor([0.5, 0.0], device=self.device), requires_grad=True)
 
         # Optimizer
         optimizer = optim.Adam([v_params], lr=self.cfg["lr"])
 
         # Get the STL formula from the environment
-        phi = self.env.get_specification(self.T)
+        if spec is not None:
+            phi = spec
+        else:
+            phi = self.env.get_specification(self.T)
 
         best_u = None
         best_p = -1.0
@@ -120,14 +132,12 @@ class ProbabilisticSTLPlanner:
             # --- A. Rollout Belief Trajectory ---
             # Forward pass through dynamics
             mean_trace, cov_trace = self.dyn(v_params, x0_mean, x0_cov)
-
-            # Compute physical controls for loss calculation u = tanh(v)
             u_seq = self.dyn.bound_control(v_params)
 
             # --- B. Wrap for STL Evaluation ---
             # We need to construct the BeliefTrajectory object for the operators
             beliefs = [
-                TorchGaussianBelief(mean_trace[:, t, :], cov_trace[:, t, :, :])
+                TorchGaussianBelief(mean_trace[:, t, :], cov_trace[:, t])
                 for t in range(self.T + 1)
             ]
             traj = BeliefTrajectory(beliefs)
@@ -143,7 +153,6 @@ class ProbabilisticSTLPlanner:
             loss_u = torch.sum(u_seq**2)
 
             # 2. Smoothness: sum ||u_t - u_{t-1}||^2
-            # (Assume u_{-1} = 0 for the first difference)
             u_diff = u_seq[1:] - u_seq[:-1]
             loss_du = torch.sum(u_diff**2) + torch.sum(u_seq[0] ** 2)
 
@@ -186,14 +195,40 @@ class ProbabilisticSTLPlanner:
                 dists = torch.norm(mean_trace[:, :, :2] - center, dim=2)
                 loss_obs = loss_obs + torch.sum(torch.relu(radius - dists) ** 2)
 
+            # Moving Obstacles
+            for obs in self.env.moving_obstacles:
+                # We construct a tensor of centers [1, T+1, 2]
+                ox = torch.as_tensor(obs["x_traj"], device=self.device)
+                oy = torch.as_tensor(obs["y_traj"], device=self.device)
+                centers = torch.stack([ox, oy], dim=1).unsqueeze(0) # [1, T+1, 2]
+                
+                radius = max(obs["width"], obs["height"]) / 2.0 + 0.75
+                dists = torch.norm(mean_trace[:, :, :2] - centers, dim=2)
+                loss_obs = loss_obs + torch.sum(torch.relu(radius - dists) ** 2)
+
+            # 6. Visit Region Heuristic
+            # Pulls the trajectory towards visit regions (minimizing min_dist over time)
+            loss_visit = torch.tensor(0.0, device=self.device)
+            for region in self.env.visit_regions:
+                vx = (region["x"][0] + region["x"][1]) / 2.0
+                vy = (region["y"][0] + region["y"][1]) / 2.0
+                v_center = torch.tensor([[vx, vy]], device=self.device)
+
+                # Squared Euclidean distance at each time step
+                dists_sq = torch.sum((mean_trace[:, :, :2] - v_center) ** 2, dim=2)
+
+                # We satisfy "Eventually" by minimizing the distance at the closest time step
+                min_dist_sq, _ = torch.min(dists_sq, dim=1)
+                loss_visit = loss_visit + torch.sum(min_dist_sq)
+
             # Total Loss
-            # Scale heuristic by dissatisfaction so it fades when satisfied
             J = (
                 self.cfg["w_u"] * loss_u
                 + self.cfg["w_du"] * loss_du
                 + self.cfg["w_phi"] * loss_phi
                 + self.cfg["w_dist"] * loss_dist
                 + self.cfg["w_obs"] * loss_obs
+                + self.cfg["w_visit"] * loss_visit
             )
 
             # --- E. Update ---
@@ -219,9 +254,9 @@ class ProbabilisticSTLPlanner:
             # Convergence Check
             if current_p >= self.cfg["alpha"]:
                 converged_iters += 1
-                if converged_iters >= 10:
+                if converged_iters >= 50:
                     print(
-                        f"Converged and held for {converged_iters} iterations. Stopping."
+                        f"Converged and held for {converged_iters} iterations. Final P(Sat): {current_p:.4f}. Stopping."
                     )
                     break
             else:
@@ -229,16 +264,13 @@ class ProbabilisticSTLPlanner:
 
             # Loss Convergence Check (Gradient is flat)
             if abs(prev_loss - J) < self.cfg.get("loss_tol", 1e-4):
-                # Only stop if we are NOT satisfied yet (stuck in local minima)
-                # If we are satisfied, we want to keep running to prove stability
-                if current_p < self.cfg["alpha"]:
-                    if verbose and k > 10:  # Ensure minimum iters
-                        print(f"Loss converged at iter {k}. Stopping.")
-                    break
+                if verbose and k > 10:  # Ensure minimum iters
+                    print(f"Loss converged at iter {k}. Stopping.")
+                break
             prev_loss = J
 
             if verbose and k % 50 == 0:
-                print(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f}")
+                print(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f} | Best: {best_p:.4f}")
 
         if render:
             plt.ioff()

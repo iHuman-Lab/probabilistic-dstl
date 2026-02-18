@@ -2,9 +2,6 @@ import torch
 import numpy as np
 
 
-# =============================================================================
-# BASE STL FORMULA
-# =============================================================================
 class STL_Formula(torch.nn.Module):
     """
     Base class for Probabilistic STL formulas.
@@ -48,9 +45,6 @@ class STL_Formula(torch.nn.Module):
         return Negation(self)
 
 
-# =============================================================================
-# SMOOTH MIN / MAX
-# =============================================================================
 class Minish(torch.nn.Module):
     """Compute minimum (exact or smooth) over specified dimension"""
 
@@ -77,9 +71,6 @@ class Maxish(torch.nn.Module):
             return x.max(dim=dim, keepdim=keepdim)[0]
 
 
-# =============================================================================
-# PREDICATES
-# =============================================================================
 class GreaterThan(STL_Formula):
     """
     Predicate: x >= threshold
@@ -175,9 +166,6 @@ class LessThan(STL_Formula):
         return f"x <= {self.threshold}"
 
 
-# =============================================================================
-# BOOLEAN OPERATORS
-# =============================================================================
 class Negation(STL_Formula):
     """
     Negation: ¬ϕ
@@ -289,9 +277,6 @@ class Implies(STL_Formula):
         return f"({self.subformula1}) ⇒ ({self.subformula2})"
 
 
-# =============================================================================
-# TEMPORAL OPERATORS BASE
-# =============================================================================
 class Temporal_Operator(STL_Formula):
     """
     Base class for temporal operators.
@@ -397,9 +382,6 @@ class Temporal_Operator(STL_Formula):
         return torch.flip(output_reversed, dims=[1])
 
 
-# =============================================================================
-# ALWAYS
-# =============================================================================
 class Always(Temporal_Operator):
     """
     □_I ϕ: Always operator
@@ -451,9 +433,6 @@ class Always(Temporal_Operator):
         return f"□_{self._interval}({self.subformula})"
 
 
-# =============================================================================
-# EVENTUALLY
-# =============================================================================
 class Eventually(Temporal_Operator):
     """
     Eventually operator: ♢_I ϕ
@@ -505,9 +484,6 @@ class Eventually(Temporal_Operator):
         return f"♢_{self._interval}({self.subformula})"
 
 
-# =============================================================================
-# UNTIL
-# =============================================================================
 class Until(STL_Formula):
     """
     ϕ U_I ψ : Until operator
