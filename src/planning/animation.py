@@ -4,19 +4,20 @@ import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 from matplotlib.animation import FuncAnimation
 
+# Tableau 10 colors
 PALETTE = {
-    "ego": {"fill": "#1f77b4", "stroke": "#1f77b4"},       # Deep Blue
-    "goal": {"fill": "#2ca02c", "stroke": "#2ca02c"},      # Deep Green
-    "visit": {"fill": "#bcbd22", "stroke": "#bcbd22"},     # Deep Olive
-    "obs_static": {"fill": "#d62728", "stroke": "#d62728"},# Deep Red
-    "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},# Deep Red
-    "lane": {"fill": "#7f7f7f", "stroke": "#7f7f7f"},      # Deep Gray
-    "plan": {"fill": "#ff7f0e", "stroke": "#ff7f0e"},      # Deep Orange
+    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Blue
+    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Orange
+    "visit":      {"fill": "#2ca02c", "stroke": "#2ca02c"},  # Green
+    "obs_static": {"fill": "#d62728", "stroke": "#d62728"},  # Red
+    "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},  # Red
+    "lane":       {"fill": "#7f7f7f", "stroke": "#7f7f7f"},  # Gray
+    "goal":       {"fill": "#bcbd22", "stroke": "#bcbd22"},  # Olive
 }
 
 
 def animate_results(
-    mean_trace, cov_trace, env, filename="trajectory.gif", plan_traces=None, step=1, dt=0.2, robot_dims=None
+    mean_trace, cov_trace, env, filename="trajectory.gif", plan_traces=None, step=1, dt=0.2, robot_dims=None, title="Motion Planning", bounds=None
 ):
     """
     Animates the robot's trajectory with covariance ellipses.
@@ -38,11 +39,16 @@ def animate_results(
 
     fig, ax = plt.subplots(figsize=(10, 10))
 
-    ax.set_xlim(-5, 15)
-    ax.set_ylim(-4, 8)
+    if bounds:
+        ax.set_xlim(bounds[0])
+        ax.set_ylim(bounds[1])
+    else:
+        ax.set_xlim(-5, 15)
+        ax.set_ylim(-4, 8)
+        
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
-    ax.set_title("Probabilistic STL Motion Planning Animation")
+    ax.set_title(title)
 
     # Draw Lane Markings
     for lane in env.lane_markings:
@@ -60,10 +66,9 @@ def animate_results(
                 (gx[0], gy[0]),
                 gx[1] - gx[0],
                 gy[1] - gy[0],
-                fill=False,
+                facecolor=PALETTE["goal"]["fill"],
                 edgecolor=PALETTE["goal"]["stroke"],
-                linestyle="-",
-                linewidth=2,
+                alpha=0.3,
                 label="Goal Lane",
                 zorder=5,
             )
@@ -80,7 +85,7 @@ def animate_results(
                 vy[1] - vy[0],
                 facecolor=PALETTE["visit"]["fill"],
                 edgecolor=PALETTE["visit"]["stroke"],
-                alpha=0.6,
+                alpha=0.3,
                 label="Visit Region",
                 zorder=5,
             )
@@ -175,9 +180,10 @@ def animate_results(
         x, y = mean_np[frame, 0], mean_np[frame, 1]
 
         # Camera Follow (Zoom/Snap)
-        ax.set_xlim(x - 8.0, x + 12.0)
-        ax.set_ylim(-4.0, 8.0)
-        
+        if bounds is None: # Only auto-follow if bounds not explicitly set
+            ax.set_xlim(x - 8.0, x + 12.0)
+            ax.set_ylim(-4.0, 8.0)
+
         if robot_dot:
             robot_dot.set_data([x], [y])
         

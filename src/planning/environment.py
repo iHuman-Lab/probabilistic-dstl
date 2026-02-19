@@ -65,6 +65,12 @@ class Environment:
         """
         self.goal = {"x": x_range, "y": y_range}
 
+    def set_bounds(self, x_range, y_range):
+        """
+        Sets hard workspace boundaries. The trajectory must always stay inside.
+        """
+        self.bounds = {"x": x_range, "y": y_range}
+
     def get_predicates(self):
         """
         """
@@ -118,6 +124,11 @@ class Environment:
                 current_safe_formula = And(current_safe_formula, obs_preds[i])
             phi_safety = Always(current_safe_formula, interval=[0, T])
             specs.append(phi_safety)
+
+        # 4. Workspace Boundary (Always stay inside)
+        if self.bounds is not None:
+            bounds_pred = RectangularGoalPredicate(self.bounds)
+            specs.append(Always(bounds_pred, interval=[0, T]))
 
         if not specs:
             raise ValueError("No constraints defined in environment.")

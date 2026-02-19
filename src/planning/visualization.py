@@ -4,19 +4,19 @@ import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 import torch
 
-
+# Tableau 10 colors
 PALETTE = {
-    "ego": {"fill": "#1f77b4", "stroke": "#1f77b4"},       # Deep Blue
-    "goal": {"fill": "#2ca02c", "stroke": "#2ca02c"},      # Deep Green
-    "visit": {"fill": "#bcbd22", "stroke": "#bcbd22"},     # Deep Olive
-    "obs_static": {"fill": "#d62728", "stroke": "#d62728"},# Deep Red
-    "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},# Deep Red
-    "lane": {"fill": "#7f7f7f", "stroke": "#7f7f7f"},      # Deep Gray
-    "plan": {"fill": "#ff7f0e", "stroke": "#ff7f0e"},      # Deep Orange
+    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Blue
+    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Orange
+    "visit":      {"fill": "#2ca02c", "stroke": "#2ca02c"},  # Green
+    "obs_static": {"fill": "#d62728", "stroke": "#d62728"},  # Red
+    "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},  # Red
+    "lane":       {"fill": "#7f7f7f", "stroke": "#7f7f7f"},  # Gray
+    "goal":       {"fill": "#bcbd22", "stroke": "#bcbd22"},  # Olive
 }
 
 
-def plot_covariance_ellipse(ax, mean, cov, k=1.96, facecolor="blue", edgecolor="blue", alpha=2.0, zorder=10):
+def plot_covariance_ellipse(ax, mean, cov, k=1.96, facecolor="blue", edgecolor="blue", alpha=0.4, zorder=10, label=None):
     """
     Draws a confidence ellipse for a 2D Gaussian belief.
     k=2.45 corresponds to ~95% confidence.
@@ -34,32 +34,21 @@ def plot_covariance_ellipse(ax, mean, cov, k=1.96, facecolor="blue", edgecolor="
     width, height = 2 * k * np.sqrt(vals)
 
     ellipse = patches.Ellipse(
-        xy=mean, width=width, height=height, angle=theta, facecolor=facecolor, edgecolor=edgecolor, alpha=alpha, zorder=zorder
+        xy=mean, width=width, height=height, angle=theta, facecolor=facecolor, edgecolor=edgecolor, alpha=alpha, zorder=zorder, label=label
     )
     ax.add_patch(ellipse)
 
 
 def visualize_results(
-    mean_trace, cov_trace, u_trace, env, history=None, p_sat_trace=None, robot_dims=None, layout="default"
+    mean_trace, cov_trace, u_trace, env, history=None, p_sat_trace=None, robot_dims=None, save_prefix="results"
 ):
-    """
-    Generates the verification outputs:
-    1. Spatial Trajectory with Covariance Ellipses
-    2. Optimization Objective Convergence
-    3. Control Input Evolution
-    """
-    # Convert tensors to numpy (ensure they are on CPU)
     mean_np = mean_trace.cpu().squeeze().numpy()
     cov_np = cov_trace.cpu().squeeze().numpy()
     u_np = u_trace.cpu().squeeze().numpy()
-
     T = mean_np.shape[0] - 1
 
-    # Common Axis Limits (calculated from full trajectory)
     x_min, x_max = np.min(mean_np[:, 0]), np.max(mean_np[:, 0])
     y_min, y_max = np.min(mean_np[:, 1]), np.max(mean_np[:, 1])
-    
-    # Expand limits to include environment
     for lane in env.lane_markings:
         x_min = min(x_min, min(lane["x"]))
         x_max = max(x_max, max(lane["x"]))
@@ -68,189 +57,342 @@ def visualize_results(
     if env.goal:
         x_max = max(x_max, env.goal["x"][1])
         y_max = max(y_max, env.goal["y"][1])
-    
-    # Add margins
-    x_lims = (x_min - 1.0, x_max + 1.0)
-    y_lims = (y_min - 1.0, y_max + 1.0)
 
-    # Helper to draw environment and state
-    def draw_scene(ax, t_idx=None, title=None):
-        if title:
-            ax.set_title(title)
-        ax.set_xlim(x_lims)
-        ax.set_ylim(y_lims)
-        ax.set_aspect("equal")
-        ax.grid(True, alpha=0.3)
+    # --- Trajectory ---
+    fig_traj, ax = plt.subplots(figsize=(8, 8))
+    ax.set_xlim(x_min - 1.0, x_max + 1.0)
+    ax.set_ylim(y_min - 1.0, y_max + 1.0)
+    ax.set_aspect("equal")
+    ax.set_xlabel("$x$ [m]", fontsize=13)
+    ax.set_ylabel("$y$ [m]", fontsize=13)
+    ax.tick_params(axis="both", labelsize=11)
+    ax.set_axisbelow(True)
+    ax.grid(True, alpha=0.3)
 
-        # Draw Environment (Static)
-        for lane in env.lane_markings:
-            lx = lane["x"]
-            ly = lane["y"]
-            style = "--" if lane["style"] == "dashed" else "-"
-            ax.plot(lx, [ly, ly], color=PALETTE["lane"]["stroke"], linestyle=style, linewidth=2, alpha=0.7)
+    for lane in env.lane_markings:
+        style = "--" if lane["style"] == "dashed" else "-"
+        ax.plot(lane["x"], [lane["y"], lane["y"]], color=PALETTE["lane"]["stroke"], linestyle=style, linewidth=2, alpha=0.7)
 
-        if env.goal:
-            gx, gy = env.goal["x"], env.goal["y"]
-            ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], fill=False, edgecolor=PALETTE["goal"]["stroke"], linestyle="-", linewidth=2, label="Goal"))
+    if env.goal:
+        gx, gy = env.goal["x"], env.goal["y"]
+        ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.3, label="Goal"))
 
-        for region in env.visit_regions:
-            vx, vy = region["x"], region["y"]
-            ax.add_patch(patches.Rectangle((vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0], facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"], alpha=0.6))
+    for region in env.visit_regions:
+        vx, vy = region["x"], region["y"]
+        ax.add_patch(patches.Rectangle((vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0], facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"], alpha=0.3, label="Visit Region"))
 
-        for obs in env.obstacles:
-            ox, oy = obs["x"], obs["y"]
-            ax.add_patch(patches.Rectangle((ox[0], oy[0]), ox[1]-ox[0], oy[1]-oy[0], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.5, hatch="//"))
+    for obs in env.obstacles:
+        ox, oy = obs["x"], obs["y"]
+        ax.add_patch(patches.Rectangle((ox[0], oy[0]), ox[1]-ox[0], oy[1]-oy[0], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.75, hatch="//", label="Obstacle"))
 
-        for obs in env.circle_obstacles:
-            ax.add_patch(patches.Circle(obs["center"], obs["radius"], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.5, hatch="//"))
+    for obs in env.circle_obstacles:
+        ax.add_patch(patches.Circle(obs["center"], obs["radius"], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.75, hatch="//", label="Obstacle"))
 
-        # Draw Moving Obstacles
-        for obs in env.moving_obstacles:
-            xt = obs["x_traj"]
-            yt = obs["y_traj"]
-            if isinstance(xt, torch.Tensor): xt = xt.detach().cpu().numpy()
-            if isinstance(yt, torch.Tensor): yt = yt.detach().cpu().numpy()
-            
-            if t_idx is None:
-                # Full Trajectory View: Show path and start/end
-                ax.plot(xt, yt, color=PALETTE["obs_moving"]["stroke"], linestyle="--", alpha=0.4, label="Moving Obs Path")
-                # Draw a few snapshots along the path
-                step = max(1, len(xt) // 5)
-                for k in range(0, len(xt), step):
-                    cx, cy = xt[k], yt[k]
-                    w, h = obs["width"], obs["height"]
-                    ax.add_patch(patches.Rectangle((cx - w/2, cy - h/2), w, h, facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], alpha=0.3))
-            else:
-                # Snapshot View: Show path faint, current position solid
-                ax.plot(xt, yt, color=PALETTE["obs_moving"]["stroke"], linestyle="--", alpha=0.15)
-                idx = min(t_idx, len(xt) - 1)
-                cx, cy = xt[idx], yt[idx]
-                w, h = obs["width"], obs["height"]
-                ax.add_patch(patches.Rectangle((cx - w/2, cy - h/2), w, h, facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], alpha=0.5, label="Moving Obs"))
+    for obs in env.moving_obstacles:
+        xt, yt = obs["x_traj"], obs["y_traj"]
+        if isinstance(xt, torch.Tensor): xt = xt.detach().cpu().numpy()
+        if isinstance(yt, torch.Tensor): yt = yt.detach().cpu().numpy()
+        ax.plot(xt, yt, color=PALETTE["obs_moving"]["stroke"], linestyle="--", alpha=0.4, label="Moving Obstacle Path")
+        snap_step = max(1, len(xt) // 5)
+        w, h = obs["width"], obs["height"]
+        for k in range(0, len(xt), snap_step):
+            ax.add_patch(patches.Rectangle((xt[k]-w/2, yt[k]-h/2), w, h, facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], alpha=0.3))
 
-        # Draw Ego Trajectory
-        if t_idx is None:
-            # Full Trajectory
-            ax.plot(mean_np[:, 0], mean_np[:, 1], color=PALETTE["ego"]["stroke"], linestyle="-", linewidth=2, alpha=0.8, label="Trajectory", zorder=25)
-            # Draw Covariance Ellipses (Subsampled for clarity)
-            for t in range(0, T + 1, 5):
-                pos_cov = cov_np[t, :2, :2]
-                plot_covariance_ellipse(ax, mean_np[t, :2], pos_cov, facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.1, zorder=15)
-        else:
-            # Snapshot Trajectory (History)
-            ax.plot(mean_np[:t_idx+1, 0], mean_np[:t_idx+1, 1], color=PALETTE["ego"]["stroke"], linestyle="-", linewidth=2, alpha=0.8, label="Trajectory")
-            
-            # Draw Ego Vehicle at t_idx
-            cx, cy = mean_np[t_idx, 0], mean_np[t_idx, 1]
-            if robot_dims:
-                l, w = robot_dims
-                # Calculate heading
-                if t_idx < T:
-                    dx = mean_np[t_idx+1, 0] - cx
-                    dy = mean_np[t_idx+1, 1] - cy
-                else:
-                    dx = cx - mean_np[t_idx-1, 0]
-                    dy = cy - mean_np[t_idx-1, 1]
-                theta = np.degrees(np.arctan2(dy, dx))
-                
-                rect = patches.Rectangle((0,0), l, w, facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.7, label="Ego")
-                t_start = transforms.Affine2D().translate(-l/2, -w/2).rotate_deg(theta).translate(cx, cy)
-                rect.set_transform(t_start + ax.transData)
-                ax.add_patch(rect)
-            else:
-                ax.plot(cx, cy, marker="o", color=PALETTE["ego"]["stroke"], markersize=8, label="Ego")
+    ax.plot(mean_np[:, 0], mean_np[:, 1], color=PALETTE["ego"]["stroke"], linewidth=2, alpha=0.8, label="Trajectory", zorder=25)
+    for t in range(0, T + 1, 2):
+        plot_covariance_ellipse(ax, mean_np[t, :2], cov_np[t, :2, :2], facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.15, zorder=15, label="Uncertainty" if t == 0 else None)
 
-            # Draw Covariance at t_idx
-            pos_cov = cov_np[t_idx, :2, :2]
-            plot_covariance_ellipse(ax, mean_np[t_idx, :2], pos_cov, facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.6, zorder=20)
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    if by_label:
+        ax.legend(by_label.values(), by_label.keys(), loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
+    fig_traj.subplots_adjust(bottom=0.20)
+    plt.savefig(f"{save_prefix}_traj.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig_traj)
 
-        # Legend (only if requested or first time, handled by caller mostly, but we can dedupe)
-        handles, labels = ax.get_legend_handles_labels()
-        by_label = dict(zip(labels, handles))
-        if by_label:
-            ax.legend(by_label.values(), by_label.keys(), loc="upper left", fontsize=8)
-
-    # --- Layout Logic ---
-    if layout == "snapshots":
-        fig = plt.figure(figsize=(24, 14))
-        # Grid Layout: 
-        # Rows 0-1: Left=Full Trajectory (2x2 space), Right=4 Snapshots (2x2)
-        # Row 2: Metrics
-        gs = fig.add_gridspec(3, 4)
-
-        # Full Trajectory
-        ax_full = fig.add_subplot(gs[0:2, 0:2])
-        draw_scene(ax_full, t_idx=None, title="Full Trajectory Realization")
-
-        # Snapshots
-        snapshot_indices = np.linspace(0, T, 4, dtype=int)
-        for i, t_idx in enumerate(snapshot_indices):
-            row = i // 2
-            col = 2 + (i % 2)
-            ax = fig.add_subplot(gs[row, col])
-            draw_scene(ax, t_idx=t_idx, title=f"Step {t_idx}")
-
-        # Metrics Locations
-        if p_sat_trace is not None:
-            ax_sat = fig.add_subplot(gs[2, 0])
-            ax_loss = fig.add_subplot(gs[2, 1])
-            ax_ctrl = fig.add_subplot(gs[2, 2:])
-        else:
-            ax_sat = None
-            ax_loss = fig.add_subplot(gs[2, 0:2])
-            ax_ctrl = fig.add_subplot(gs[2, 2:])
-
-    else:
-        # Default Layout (Single Shot / Standard)
-        fig = plt.figure(figsize=(18, 10))
-        gs = fig.add_gridspec(2, 2, width_ratios=[1.5, 1])
-
-        # Full Trajectory (Left Column)
-        ax_full = fig.add_subplot(gs[:, 0])
-        draw_scene(ax_full, t_idx=None, title="Trajectory & Beliefs")
-
-        # Metrics Locations (Right Column)
-        if p_sat_trace is not None:
-            ax_sat = fig.add_subplot(gs[0, 1])
-            ax_loss = None # Share space or skip
-            ax_ctrl = fig.add_subplot(gs[1, 1])
-        else:
-            ax_sat = None
-            ax_loss = fig.add_subplot(gs[0, 1])
-            ax_ctrl = fig.add_subplot(gs[1, 1])
-
-    # --- Plot Metrics ---
-    # Satisfaction Plot
-    if ax_sat is not None and p_sat_trace is not None:
-        ax_sat.plot(p_sat_trace, color=PALETTE["goal"]["stroke"], marker="o", linewidth=2, markersize=4)
-        ax_sat.set_title("MPC: Satisfaction Probability per Step")
-        ax_sat.set_xlabel("Simulation Step")
-        ax_sat.set_ylabel("P(Sat)")
-        ax_sat.grid(True, alpha=0.5)
-
-    # Loss Plot
-    if ax_loss is not None:
-        if history is not None:
-            label = "Step" if p_sat_trace is not None else "Iteration"
-            title = "Final Loss per Step" if p_sat_trace is not None else "Optimization Convergence"
-            ax_loss.plot(history, color=PALETTE["lane"]["stroke"], linewidth=2)
-            ax_loss.set_title(title)
-            ax_loss.set_xlabel(label)
-            ax_loss.set_ylabel("Loss J")
-            ax_loss.grid(True, alpha=0.5)
-        else:
-            ax_loss.text(0.5, 0.5, "No Loss History", ha="center")
-
-    # Control Plot
-    if ax_ctrl is not None:
-        time_steps = np.arange(T)
-        ax_ctrl.plot(time_steps, u_np[:, 0], color=PALETTE["obs_static"]["stroke"], linestyle="--", label="$u_x$")
-        ax_ctrl.plot(time_steps, u_np[:, 1], color=PALETTE["ego"]["stroke"], linestyle="--", label="$u_y$")
-        ax_ctrl.set_title("Control Inputs")
-        ax_ctrl.set_xlabel("Time Step")
-        ax_ctrl.set_ylabel("Control Output")
-        ax_ctrl.legend()
-        ax_ctrl.grid(True, alpha=0.5)
-
+    # --- Control Inputs ---
+    time_steps = np.arange(T)
+    fig_ctrl, axes = plt.subplots(2, 1, figsize=(10, 5), sharex=True)
+    axes[0].plot(time_steps, u_np[:, 0], color=PALETTE["ego"]["stroke"], linewidth=1.8)
+    axes[0].axhline(0, color="k", linewidth=0.5, linestyle=":")
+    axes[0].set_ylabel("$u_x$", fontsize=13)
+    axes[0].tick_params(labelsize=11)
+    axes[0].grid(True, alpha=0.35)
+    axes[1].plot(time_steps, u_np[:, 1], color=PALETTE["plan"]["stroke"], linewidth=1.8)
+    axes[1].axhline(0, color="k", linewidth=0.5, linestyle=":")
+    axes[1].set_ylabel("$u_y$", fontsize=13)
+    axes[1].set_xlabel("Time Step", fontsize=13)
+    axes[1].tick_params(labelsize=11)
+    axes[1].grid(True, alpha=0.35)
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig_ctrl)
+
+    # --- Metrics ---
+    if history is not None or p_sat_trace is not None:
+        fig_met, ax_met = plt.subplots(figsize=(10, 4))
+        if p_sat_trace is not None:
+            ax_met.plot(p_sat_trace, color=PALETTE["goal"]["stroke"], marker="o", linewidth=2, markersize=4, label="$P(\\varphi)$")
+            ax_met.set_ylabel("$P(\\varphi)$", fontsize=13)
+        elif history is not None:
+            ax_met.plot(history, color=PALETTE["lane"]["stroke"], linewidth=2, label="Loss")
+            ax_met.set_ylabel("Loss", fontsize=13)
+        ax_met.set_xlabel("Iteration", fontsize=13)
+        ax_met.tick_params(labelsize=11)
+        ax_met.grid(True, alpha=0.35)
+        ax_met.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
+        fig_met.subplots_adjust(bottom=0.25)
+        plt.savefig(f"{save_prefix}_metrics.pdf", bbox_inches="tight", pad_inches=0.1)
+        plt.close(fig_met)
+
+
+def _road_backdrop(ax, env):
+    """Draw road background, goal lane fill, and lane markings onto ax."""
+    road_lo = min(lm["y"] for lm in env.lane_markings) if env.lane_markings else -2.0
+    road_hi = max(lm["y"] for lm in env.lane_markings) if env.lane_markings else  6.0
+    ax.axhspan(road_lo, road_hi, color="#ebebeb", zorder=0)
+    if env.goal:
+        gy0, gy1 = env.goal["y"]
+        ax.axhspan(gy0, gy1, color=PALETTE["goal"]["fill"], alpha=0.22, zorder=1, label="Goal Lane")
+    for lane in env.lane_markings:
+        style = "--" if lane["style"] == "dashed" else "-"
+        lw    = 1.5  if lane["style"] == "dashed" else 2.0
+        ax.axhline(lane["y"], color=PALETTE["lane"]["stroke"], linestyle=style,
+                   linewidth=lw, alpha=0.9, zorder=2)
+    return road_lo, road_hi
+
+
+def _draw_ego_rect(ax, x, y, heading_deg, rw, rh, alpha, zorder=7):
+    """Draw one oriented ego vehicle rectangle."""
+    t_aff = transforms.Affine2D().translate(-rw / 2, -rh / 2).rotate_deg(heading_deg).translate(x, y)
+    ax.add_patch(patches.Rectangle(
+        (0, 0), rw, rh,
+        transform=t_aff + ax.transData,
+        facecolor=PALETTE["ego"]["fill"],
+        edgecolor=PALETTE["ego"]["stroke"],
+        linewidth=1.2, alpha=alpha, zorder=zorder,
+    ))
+
+
+def _heading(mean_np, t, T):
+    dx = mean_np[min(t + 1, T), 0] - mean_np[max(t - 1, 0), 0]
+    dy = mean_np[min(t + 1, T), 1] - mean_np[max(t - 1, 0), 1]
+    return np.degrees(np.arctan2(dy, dx))
+
+
+def visualize_lane_change(
+    mean_trace, cov_trace, u_trace, env, p_sat_trace=None, dt=0.2, robot_dims=None, save_prefix="lane_change"
+):
+    """
+    Publication-quality visualization for the lane change MPC scenario.
+    Produces three PDFs:
+      - <save_prefix>_traj.pdf     : bird's-eye continuous trajectory + uncertainty tube
+      - <save_prefix>_snapshot.pdf : ghost vehicles at discrete timesteps
+      - <save_prefix>_ctrl.pdf     : accelerations + P(sat) on a shared time axis
+    """
+    mean_np = mean_trace.cpu().squeeze().numpy()   # [T+1, ≥2]
+    cov_np  = cov_trace.cpu().squeeze().numpy()    # [T+1, D, D]
+    u_np    = u_trace.cpu().squeeze().numpy()      # [T,  2]
+    T = mean_np.shape[0] - 1
+    time_u = np.arange(T) * dt
+
+    road_lo = min(lm["y"] for lm in env.lane_markings) if env.lane_markings else -2.0
+    road_hi = max(lm["y"] for lm in env.lane_markings) if env.lane_markings else  6.0
+    x_lo = mean_np[:, 0].min() - 1.5
+    x_hi = mean_np[:, 0].max() + 1.5
+    y_lo, y_hi = road_lo - 1.2, road_hi + 1.2
+
+    # ------------------------------------------------------------------ #
+    # Figure 1: Continuous trajectory + uncertainty tube
+    # ------------------------------------------------------------------ #
+    fig1, ax1 = plt.subplots(figsize=(13, 4.5))
+    ax1.set_xlim(x_lo, x_hi)
+    ax1.set_ylim(y_lo, y_hi)
+    ax1.set_xlabel("$x$ [m]", fontsize=13)
+    ax1.set_ylabel("$y$ [m]", fontsize=13)
+    ax1.tick_params(axis="both", labelsize=11)
+    ax1.set_axisbelow(True)
+    ax1.grid(True, alpha=0.25)
+    _road_backdrop(ax1, env)
+
+    for obs in env.obstacles:
+        ax1.add_patch(patches.Rectangle(
+            (obs["x"][0], obs["y"][0]), obs["x"][1]-obs["x"][0], obs["y"][1]-obs["y"][0],
+            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"],
+            alpha=0.75, hatch="//", zorder=3, label="Stopped Vehicle",
+        ))
+
+    # Moving obstacle: ghost path
+    for obs in env.moving_obstacles:
+        xt = np.asarray(obs["x_traj"].detach().cpu() if isinstance(obs["x_traj"], torch.Tensor) else obs["x_traj"])
+        yt = np.asarray(obs["y_traj"].detach().cpu() if isinstance(obs["y_traj"], torch.Tensor) else obs["y_traj"])
+        mask = (xt >= x_lo) & (xt <= x_hi)
+        ax1.plot(xt[mask], yt[mask], color=PALETTE["obs_moving"]["stroke"],
+                 linestyle="--", linewidth=1.2, alpha=0.4, zorder=3, label="Other Vehicle Path")
+        w, h = obs["width"], obs["height"]
+        for ki, idx in enumerate(np.linspace(0, len(xt) - 1, 5, dtype=int)):
+            if not mask[idx]:
+                continue
+            ax1.add_patch(patches.Rectangle(
+                (xt[idx] - w / 2, yt[idx] - h / 2), w, h,
+                facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
+                linewidth=0.8, alpha=0.15 + 0.5 * (ki / 4), zorder=4,
+            ))
+
+    # Uncertainty tube
+    step_ell = max(1, T // 16)
+    for t in range(0, T + 1, step_ell):
+        plot_covariance_ellipse(
+            ax1, mean_np[t, :2], cov_np[t, :2, :2], k=2.45,
+            facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
+            alpha=0.16, zorder=5, label="95% CI" if t == 0 else None,
+        )
+
+    # Ego trajectory + dense footprints
+    ax1.plot(mean_np[:, 0], mean_np[:, 1],
+             color=PALETTE["ego"]["stroke"], linewidth=2.2, alpha=0.9, zorder=7, label="Ego Trajectory")
+    if robot_dims:
+        rw, rh = robot_dims
+        for t in range(0, T + 1, max(1, T // 10)):
+            _draw_ego_rect(ax1, mean_np[t, 0], mean_np[t, 1], _heading(mean_np, t, T),
+                           rw, rh, alpha=0.30, zorder=6)
+
+    ax1.plot(mean_np[0,  0], mean_np[0,  1], "o", color=PALETTE["ego"]["stroke"], markersize=6, zorder=9)
+    ax1.plot(mean_np[-1, 0], mean_np[-1, 1], "s", color=PALETTE["ego"]["stroke"], markersize=6, zorder=9)
+
+    handles, labels = ax1.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax1.legend(by_label.values(), by_label.keys(),
+               loc="upper center", bbox_to_anchor=(0.5, -0.22),
+               ncol=4, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
+    fig1.subplots_adjust(bottom=0.28)
+    plt.savefig(f"{save_prefix}_traj.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig1)
+
+    # ------------------------------------------------------------------ #
+    # Figure 2: Ghost / snapshot — vehicle at N discrete timesteps
+    # ------------------------------------------------------------------ #
+    N_SNAP = 6
+    snap_t = np.linspace(0, T, N_SNAP, dtype=int)
+
+    fig2, ax2 = plt.subplots(figsize=(13, 4.5))
+    ax2.set_xlim(x_lo, x_hi)
+    ax2.set_ylim(y_lo, y_hi)
+    ax2.set_xlabel("$x$ [m]", fontsize=13)
+    ax2.set_ylabel("$y$ [m]", fontsize=13)
+    ax2.tick_params(axis="both", labelsize=11)
+    ax2.set_axisbelow(True)
+    ax2.grid(True, alpha=0.25)
+    _road_backdrop(ax2, env)
+
+    for obs in env.obstacles:
+        ax2.add_patch(patches.Rectangle(
+            (obs["x"][0], obs["y"][0]), obs["x"][1]-obs["x"][0], obs["y"][1]-obs["y"][0],
+            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"],
+            alpha=0.75, hatch="//", zorder=3,
+        ))
+
+    # Thin full trajectory as reference line
+    ax2.plot(mean_np[:, 0], mean_np[:, 1],
+             color=PALETTE["ego"]["stroke"], linewidth=1.2, alpha=0.35, zorder=4)
+
+    # Obstacle ghost path
+    for obs in env.moving_obstacles:
+        xt = np.asarray(obs["x_traj"].detach().cpu() if isinstance(obs["x_traj"], torch.Tensor) else obs["x_traj"])
+        yt = np.asarray(obs["y_traj"].detach().cpu() if isinstance(obs["y_traj"], torch.Tensor) else obs["y_traj"])
+        mask = (xt >= x_lo) & (xt <= x_hi)
+        ax2.plot(xt[mask], yt[mask], color=PALETTE["obs_moving"]["stroke"],
+                 linestyle="--", linewidth=1.2, alpha=0.35, zorder=3)
+
+    # Legend patches
+    ego_patch    = patches.Patch(facecolor=PALETTE["ego"]["fill"],       edgecolor=PALETTE["ego"]["stroke"],       linewidth=1.2, label="Ego Vehicle")
+    obs_patch    = patches.Patch(facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], linewidth=1.2, label="Other Vehicle")
+    static_patch = patches.Patch(facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], linewidth=1.2, label="Stopped Vehicle")
+    ci_patch     = patches.Patch(facecolor=PALETTE["ego"]["fill"],       edgecolor=PALETTE["ego"]["stroke"],       linewidth=0.8, alpha=0.25, label="95% CI")
+    goal_patch   = patches.Patch(facecolor=PALETTE["goal"]["fill"],      edgecolor="none",                         alpha=0.5, label="Goal Lane")
+
+    for ki, t in enumerate(snap_t):
+        frac  = ki / (N_SNAP - 1)          # 0 → 1
+        alpha = 0.35 + 0.55 * frac         # early=faint, late=opaque
+        t_sec = t * dt
+
+        # 95% CI ellipse
+        plot_covariance_ellipse(
+            ax2, mean_np[t, :2], cov_np[t, :2, :2], k=2.45,
+            facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
+            alpha=0.10 + 0.15 * frac, zorder=5,
+        )
+
+        # Ego rectangle
+        ex, ey = mean_np[t, 0], mean_np[t, 1]
+        if robot_dims:
+            rw, rh = robot_dims
+            _draw_ego_rect(ax2, ex, ey, _heading(mean_np, t, T), rw, rh, alpha=alpha, zorder=7)
+            label_y_off = rh / 2 + 0.45
+        else:
+            ax2.plot(ex, ey, "o", color=PALETTE["ego"]["stroke"], markersize=6, alpha=alpha, zorder=7)
+            label_y_off = 0.5
+
+        # Time label — placed above vehicle with a white backing box
+        ax2.annotate(
+            f"$t={t_sec:.1f}\\,$s",
+            xy=(ex, ey + label_y_off),
+            fontsize=8.5, ha="center", va="bottom", color=PALETTE["ego"]["stroke"],
+            zorder=10,
+            bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.75),
+        )
+
+        # Obstacle rectangle at same timestep
+        for obs in env.moving_obstacles:
+            xt = np.asarray(obs["x_traj"].detach().cpu() if isinstance(obs["x_traj"], torch.Tensor) else obs["x_traj"])
+            yt = np.asarray(obs["y_traj"].detach().cpu() if isinstance(obs["y_traj"], torch.Tensor) else obs["y_traj"])
+            if t < len(xt) and x_lo <= xt[t] <= x_hi:
+                ax2.add_patch(patches.Rectangle(
+                    (xt[t] - obs["width"] / 2, yt[t] - obs["height"] / 2), obs["width"], obs["height"],
+                    facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
+                    linewidth=1.0, alpha=alpha, zorder=6,
+                ))
+
+    ax2.legend(handles=[ego_patch, obs_patch, static_patch, ci_patch, goal_patch],
+               loc="upper center", bbox_to_anchor=(0.5, -0.22),
+               ncol=5, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
+    fig2.subplots_adjust(bottom=0.28)
+    plt.savefig(f"{save_prefix}_snapshot.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig2)
+
+    # ------------------------------------------------------------------ #
+    # Figure 3: Control inputs + P(sat)  — shared time axis [s]
+    # ------------------------------------------------------------------ #
+    n_rows = 3 if p_sat_trace is not None else 2
+    fig3, axes = plt.subplots(n_rows, 1, figsize=(10, 2.6 * n_rows), sharex=True)
+
+    axes[0].plot(time_u, u_np[:, 0], color=PALETTE["ego"]["stroke"], linewidth=1.8)
+    axes[0].axhline(0, color="k", linewidth=0.5, linestyle=":")
+    axes[0].set_ylabel("$a_x$ [m/s²]", fontsize=12)
+    axes[0].set_title("Control Inputs and Satisfaction Probability", fontsize=13, fontweight="bold")
+    axes[0].grid(True, alpha=0.35)
+    axes[0].tick_params(labelsize=11)
+
+    axes[1].plot(time_u, u_np[:, 1], color=PALETTE["plan"]["stroke"], linewidth=1.8)
+    axes[1].axhline(0, color="k", linewidth=0.5, linestyle=":")
+    axes[1].set_ylabel("$a_y$ [m/s²]", fontsize=12)
+    axes[1].grid(True, alpha=0.35)
+    axes[1].tick_params(labelsize=11)
+
+    if p_sat_trace is not None:
+        p_sat_arr = np.asarray(p_sat_trace)
+        axes[2].plot(time_u[:len(p_sat_arr)], p_sat_arr,
+                     color=PALETTE["goal"]["stroke"], linewidth=1.8,
+                     marker="o", markersize=3, label="$P(\\varphi)$")
+        axes[2].axhline(0.9, color="k", linewidth=0.8, linestyle="--",
+                        alpha=0.55, label="Threshold ($\\alpha = 0.90$)")
+        axes[2].set_ylim(0, 1.05)
+        axes[2].set_ylabel("$P(\\varphi)$", fontsize=12)
+        axes[2].legend(fontsize=11, loc="lower right", framealpha=0.9)
+        axes[2].grid(True, alpha=0.35)
+        axes[2].tick_params(labelsize=11)
+
+    axes[-1].set_xlabel("Time [s]", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig3)

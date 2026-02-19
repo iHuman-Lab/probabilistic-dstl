@@ -2,6 +2,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+# Tableau 10
+_BLUE  = "#1f77b4"
+_RED   = "#d62728"
+_GREEN = "#2ca02c"
+_GRAY  = "#7f7f7f"
+
 
 def _to_numpy(trace, T):
     """Convert trace to numpy [T, 2]."""
@@ -56,54 +62,39 @@ def plot_stl_formula_bounds(
         var_trace = np.asarray(var_trace)
         sigma = np.sqrt(np.maximum(var_trace, 0.0))
 
-        ax_signal.fill_between(
-            time, mean_trace - sigma, mean_trace + sigma, alpha=0.25, color="steelblue"
-        )
-        ax_signal.plot(time, mean_trace, "b-", lw=1.5, label="μ(t)")
-        ax_signal.plot(time, mean_trace + sigma, "b--", lw=1, alpha=0.7, label="μ ± σ")
-        ax_signal.plot(time, mean_trace - sigma, "b--", lw=1, alpha=0.7)
+        ax_signal.fill_between(time, mean_trace - sigma, mean_trace + sigma, alpha=0.25, color=_BLUE)
+        ax_signal.plot(time, mean_trace, color=_BLUE, lw=1.5, label="$\\mu(t)$")
+        ax_signal.plot(time, mean_trace + sigma, color=_BLUE, lw=1, ls="--", alpha=0.7, label="$\\mu \\pm \\sigma$")
+        ax_signal.plot(time, mean_trace - sigma, color=_BLUE, lw=1, ls="--", alpha=0.7)
 
         if thresholds is not None:
-            thresholds = (
-                [thresholds]
-                if not isinstance(thresholds, (list, tuple))
-                else thresholds
-            )
+            thresholds = [thresholds] if not isinstance(thresholds, (list, tuple)) else thresholds
             for th in thresholds:
-                ax_signal.axhline(th, color="red", ls="--", lw=1.5, label=f"h = {th}")
+                ax_signal.axhline(th, color=_RED, ls="--", lw=1.5, label=f"$h = {th}$")
 
-    ax_signal.set_ylabel("x(t)")
+    ax_signal.set_ylabel("$x(t)$", fontsize=11)
     ax_signal.set_title("(a) Signal Trajectory", loc="left", fontweight="bold")
-    ax_signal.legend(loc="upper right", fontsize=8)
+    ax_signal.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=3, fontsize=9, framealpha=0.95)
     ax_signal.grid(True, alpha=0.3)
 
-    # Panel (b): Predicate with sliding windows
-
     if ax_pred is not None:
-        ax_pred.fill_between(
-            time, pred[:, 0], pred[:, 1], alpha=0.3, color="lightgreen"
-        )
-        ax_pred.plot(time, pred[:, 0], "b-", lw=1.5, label="Lower bound")
-        ax_pred.plot(time, pred[:, 1], "r-", lw=1.5, label="Upper bound")
-
-        ax_pred.set_ylabel("P(φ)")
+        ax_pred.fill_between(time, pred[:, 0], pred[:, 1], alpha=0.3, color=_GREEN)
+        ax_pred.plot(time, pred[:, 0], color=_BLUE, lw=1.5, label="$P_{\\mathrm{lower}}$")
+        ax_pred.plot(time, pred[:, 1], color=_RED, lw=1.5, label="$P_{\\mathrm{upper}}$")
+        ax_pred.set_ylabel("$P(\\varphi)$", fontsize=11)
         ax_pred.set_ylim(-0.05, 1.05)
-        ax_pred.set_title(
-            "(b) Predicate Satisfaction Probability", loc="left", fontweight="bold"
-        )
-        ax_pred.legend(loc="upper right", fontsize=8)
+        ax_pred.set_title("(b) Predicate Satisfaction Probability", loc="left", fontweight="bold")
+        ax_pred.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=9, framealpha=0.95)
         ax_pred.grid(True, alpha=0.3)
 
-    # Panel (c): Operator output
-    ax_oper.fill_between(time, oper[:, 0], oper[:, 1], alpha=0.3, color="lightgreen")
-    ax_oper.plot(time, oper[:, 0], "b-", lw=1.5, label="Lower bound")
-    ax_oper.plot(time, oper[:, 1], "r-", lw=1.5, label="Upper bound")
-
-    ax_oper.set_xlabel("Time (s)")
-    ax_oper.set_ylabel(f"P({op_symbol}φ)")
+    ax_oper.fill_between(time, oper[:, 0], oper[:, 1], alpha=0.3, color=_GREEN)
+    ax_oper.plot(time, oper[:, 0], color=_BLUE, lw=1.5, label="$P_{\\mathrm{lower}}$")
+    ax_oper.plot(time, oper[:, 1], color=_RED, lw=1.5, label="$P_{\\mathrm{upper}}$")
+    ax_oper.set_xlabel("Time [s]", fontsize=11)
+    ax_oper.set_ylabel(f"$P({op_symbol}\\varphi)$", fontsize=11)
     ax_oper.set_ylim(-0.05, 1.05)
     ax_oper.set_title("(c) Temporal Operator Output", loc="left", fontweight="bold")
-    ax_oper.legend(loc="upper right", fontsize=8)
+    ax_oper.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize=9, framealpha=0.95)
     ax_oper.grid(True, alpha=0.3)
 
     if formula_str:
@@ -137,12 +128,12 @@ def _draw_output_markers(ax, time, T, interval, oper):
     else:
         t_indices = np.linspace(0, max_start, n_windows).astype(int)
 
-    colors = plt.cm.Oranges(np.linspace(0.25, 0.65, len(t_indices)))
+    alphas = np.linspace(0.35, 0.85, len(t_indices))
 
     for i, t_idx in enumerate(t_indices):
         if t_idx >= T:
             continue
-        ax.plot(time[t_idx], oper[t_idx, 0], "o", color=colors[i], markersize=5)
+        ax.plot(time[t_idx], oper[t_idx, 0], "o", color="#ff7f0e", alpha=alphas[i], markersize=5)
 
 
 def plot_piecewise_stl(
@@ -177,12 +168,11 @@ def plot_piecewise_stl(
     a, b = interval if interval else [0, 1]
     op_symbol = "□" if operator_type == "always" else "◇"
 
-    # Colors
-    signal_color = "black"
-    bound_color = "steelblue"
-    threshold_color = "red"
-    lower_color = "blue"
-    upper_color = "red"
+    signal_color = _GRAY
+    bound_color = _BLUE
+    threshold_color = _RED
+    lower_color = _BLUE
+    upper_color = _RED
 
     # Figure
     fig, axes = plt.subplots(3, 1, figsize=figsize)
@@ -223,8 +213,7 @@ def plot_piecewise_stl(
                     lw=2,
                 )
 
-            # Marker
-            ax1.plot(time[i], mean_trace[i], "ko", markersize=6)
+            ax1.plot(time[i], mean_trace[i], "o", color=_GRAY, markersize=6)
 
         ax1.axhline(threshold, color=threshold_color, ls="--", lw=1.5)
 
@@ -291,8 +280,8 @@ def plot_piecewise_stl(
                     alpha=0.5,
                 )
 
-            ax2.plot(time[i], pred[i, 0], "bo", markersize=5)
-            ax2.plot(time[i], pred[i, 1], "ro", markersize=5)
+            ax2.plot(time[i], pred[i, 0], "o", color=_BLUE, markersize=5)
+            ax2.plot(time[i], pred[i, 1], "o", color=_RED,  markersize=5)
 
     ax2.set_ylabel("P(φ)", fontsize=11)
     ax2.set_ylim(-0.05, 1.05)
@@ -302,9 +291,9 @@ def plot_piecewise_stl(
         fontsize=11,
         fontweight="bold",
     )
-    ax2.plot([], [], "b-", lw=2, label="P$_{lower}$")
-    ax2.plot([], [], "r-", lw=2, label="P$_{upper}$")
-    ax2.legend(loc="right", fontsize=9)
+    ax2.plot([], [], color=_BLUE, lw=2, label="$P_{\\mathrm{lower}}$")
+    ax2.plot([], [], color=_RED,  lw=2, label="$P_{\\mathrm{upper}}$")
+    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize=9, framealpha=0.95)
     ax2.set_xlim(-0.3, time[-1] + 1)
     ax2.grid(True, alpha=0.3)
 
@@ -340,8 +329,8 @@ def plot_piecewise_stl(
                 alpha=0.5,
             )
 
-        ax3.plot(time[i], oper[i, 0], "bo", markersize=5)
-        ax3.plot(time[i], oper[i, 1], "ro", markersize=5)
+        ax3.plot(time[i], oper[i, 0], "o", color=_BLUE, markersize=5)
+        ax3.plot(time[i], oper[i, 1], "o", color=_RED,  markersize=5)
 
     ax3.set_xlabel("Time t", fontsize=11)
     ax3.set_ylabel(f"P({op_symbol}φ)", fontsize=11)
@@ -352,9 +341,9 @@ def plot_piecewise_stl(
         fontsize=11,
         fontweight="bold",
     )
-    ax3.plot([], [], "b-", lw=2, label=f"{op_symbol}P$_{{lower}}$")
-    ax3.plot([], [], "r-", lw=2, label=f"{op_symbol}P$_{{upper}}$")
-    ax3.legend(loc="right", fontsize=9)
+    ax3.plot([], [], color=_BLUE, lw=2, label=f"${op_symbol}P_{{\\mathrm{{lower}}}}$")
+    ax3.plot([], [], color=_RED,  lw=2, label=f"${op_symbol}P_{{\\mathrm{{upper}}}}$")
+    ax3.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize=9, framealpha=0.95)
     ax3.set_xlim(-0.3, time[-1] + 1)
     ax3.set_xticks(time)
     ax3.grid(True, alpha=0.3)
