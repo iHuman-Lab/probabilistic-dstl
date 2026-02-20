@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.transforms import blended_transform_factory
 from planning.environment import Environment
 from planning.dynamics import SingleIntegrator, DoubleIntegrator
 from planning.planner import ProbabilisticSTLPlanner
@@ -72,35 +73,35 @@ def run_single_shot(max_iterations=1000):
     env = Environment(device=device)
 
     # Scenario: Reach (3.5, 10.5)
-    env.set_goal(x_range=[2.0, 4.0], y_range=[7.0, 9.0])
-    env.set_bounds(x_range=[-2.0, 12.0], y_range=[-2.0, 12.0])
+    env.set_goal(x_range=[5.0, 7.0], y_range=[7.0, 9.0])
+    env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 9.5])
+    
 
-    # Add a visit region (waypoint)
-    env.add_visit_region(x_range=[8.0, 10.0], y_range=[4.0, 6.0])
+   # Add a visit region (waypoint)
+    env.add_visit_region(x_range=[7.5, 10.0], y_range=[3.0, 6.0])
 
     # Add obstacles 
     # 1. Rectangle obstacle
-    env.add_obstacle(x_range=[-1.0, 1.0], y_range=[4.0, 6.0])
-    env.add_obstacle(x_range=[2.0, 6.0], y_range=[0.0, 2.0])
-    #env.add_obstacle(x_range=[8.0, 10.0], y_range=[4.0, 6.0])
+    env.add_obstacle(x_range=[0.0, 2.0], y_range=[3.0, 6.0])
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[0.0, 1.0])
 
 
     # 2. Circle obstacle
-    env.add_circle_obstacle(center=[3.5, 3.5], radius=1.8)
+    env.add_circle_obstacle(center=[5.0, 4.5], radius=1.5)
 
     # --- Setup Dynamics ---
-    dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.02, device=device)
+    dynamics = SingleIntegrator(dt=dt, u_max=1.5, q_std=0.02, device=device)
       
     # --- Planner Config ---
     # Configuration for the gradient descent
     planner_cfg = {
-        "w_u": 0.9,  # Weight on control effort
-        "w_du": 0.05,  # Weight on smoothness
+        "w_u": 0.5,  # Weight on control effort
+        "w_du": 0.09,  # Weight on smoothness
         "w_phi": 100.0,  # Weight on STL satisfaction
         "lr": 0.05,  # Learning rate
         "max_iters": max_iterations,  # Max iterations
         "alpha": 0.95,  # Success threshold
-        "w_dist": 4.0,  # Goal guidance heuristic weight
+        "w_dist": 10.0,  # Goal guidance heuristic weight
         "w_obs": 2.0,  # Obstacle repulsion heuristic weight
         "w_visit": 4.0,  # Visit region heuristic weight
     }
@@ -338,30 +339,28 @@ def run_lane_change():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    H = 45        # Planning horizon (lookahead steps)
-    T_SIM = 100   # Total simulation steps
+    H = 35        # Planning horizon (lookahead steps)
+    T_SIM = 150   # Total simulation steps
     dt = 0.2      # Time step [s]
 
-    # Lane 1: y in [-2, 2],  Lane 2: y in [2, 6]
+    # Road: Lane 1 y ∈ [-2, 2],  Lane 2 y ∈ [2, 6]
     env_global = Environment(device=device)
-    env_global.add_lane_marking(x_range=[-5, 30], y_pos=2.0,  style="dashed")
-    env_global.add_lane_marking(x_range=[-5, 30], y_pos=-2.0, style="solid")
-    env_global.add_lane_marking(x_range=[-5, 30], y_pos=6.0,  style="solid")
+    env_global.add_lane_marking(x_range=[-5, 120], y_pos= 2.0, style="dashed")
+    env_global.add_lane_marking(x_range=[-5, 120], y_pos=-2.0, style="solid")
+    env_global.add_lane_marking(x_range=[-5, 120], y_pos= 6.0, style="solid")
+    # Target lane band — used for final visualization highlighting only
+    env_global.set_goal(x_range=[0.0, 200.0], y_range=[2.0, 6.0])
 
-    # Goal: Lane 2 (y=2.5–5.5). Wide x-range provides forward heuristic pull.
-    env_global.set_goal(x_range=[0.0, 40.0], y_range=[2.5, 5.5])
-
-    # Moving obstacle: vehicle in Lane 2 ahead of where the ego will merge.
-    # Starts at x=8 to give the ego room to enter Lane 2, moves at 0.5 m/s.
+    # Moving obstacle: slower vehicle in Lane 2, same starting x as ego.
+    # Ego (1.3 m/s) > obstacle (0.8 m/s), so ego naturally overtakes then merges.
     total_points = T_SIM + H + 10
     times = np.arange(total_points) * dt
-
-    obs_x_global = 8.0 + 0.5 * times
+    obs_x_global = 0.0 + 0.8 * times
     obs_y_global = np.ones_like(times) * 4.0
 
     env_global.add_moving_obstacle(
-        obs_x_global[:T_SIM+1],
-        obs_y_global[:T_SIM+1],
+        obs_x_global[:T_SIM + 1],
+        obs_y_global[:T_SIM + 1],
         width=2.5,
         height=1.5,
     )
@@ -370,65 +369,98 @@ def run_lane_change():
     dynamics = DoubleIntegrator(dt=dt, u_max=1.5, q_std=0.001, device=device)
 
     planner_cfg = {
-        "w_u": 0.2,
-        "w_du": 0.7,
-        "w_phi": 100.0,
-        "lr": 0.05,
+        "w_u":     0.05,
+        "w_du":    1.5,    # High smoothness to prevent oscillation
+        "w_phi":   100.0,
+        "lr":      0.05,
         "max_iters": 200,
-        "alpha": 0.95,
-        "w_dist": 5.0,
-        "w_obs": 50.0,
+        "alpha":   0.90,
+        "w_dist":  5.0,    # Reduced as goal center is further away
+        "w_obs":   10.0,
+        "w_visit": 0.0,
         "loss_tol": 1e-5,
     }
 
     print("Starting Lane Change MPC Simulation...")
 
-    # Initial state: Lane 1 centre with forward velocity
+    # Initial state: Lane 1 centre, forward velocity
     curr_mean = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device)
-    curr_cov = torch.eye(4, device=device) * 0.01
+    curr_cov  = torch.eye(4, device=device) * 0.01
 
     real_mean_trace = [curr_mean]
-    real_cov_trace = [curr_cov]
-    real_u_trace = []
-    loss_trace = []
-    p_sat_trace = []
-    all_plans = []
-    prev_u_sol = None
+    real_cov_trace  = [curr_cov]
+    real_u_trace    = []
+    loss_trace      = []
+    p_sat_trace     = []
+    all_plans       = []
+    prev_u_sol      = None
+    success_counter = 0
 
-    # --- Live Visualization Setup ---
+    # --- Live Visualization ---
     plt.ion()
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.set_xlim(-2, 28)
-    ax.set_ylim(-4, 8)
-    ax.set_aspect("equal")
-    ax.grid(True, alpha=0.3)
-    ax.set_title("Live MPC Execution")
+    fig, ax = plt.subplots(figsize=(14, 4))
+    # No equal aspect — road is wide, lanes are narrow; let x scroll freely
+    ax.grid(True, alpha=0.3, zorder=3)
+    ax.set_title("Lane Change MPC — Live Execution")
+    ax.set_ylabel("$y$ [m]")
+    ax.set_xlabel("$x$ [m]")
 
-    # Draw Static Env
-    for lane in env_global.lane_markings:
-        ax.plot(lane["x"], [lane["y"], lane["y"]], color=PALETTE["lane"]["stroke"], linestyle="--", alpha=0.7)
-    for obs in env_global.obstacles:
-        ax.add_patch(patches.Rectangle((obs["x"][0], obs["y"][0]), obs["x"][1]-obs["x"][0], obs["y"][1]-obs["y"][0], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.6))
-    gx, gy = env_global.goal["x"], env_global.goal["y"]
-    ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.3))
+    # Road background and lane structure
+    ax.axhspan(-2, 6, color=PALETTE["road"]["fill"], zorder=0)
+    ax.axhspan(3.0, 5.0, color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1)  # target band
+    ax.axhline(-2, color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-",  alpha=0.8, zorder=2)
+    ax.axhline( 6, color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-",  alpha=0.8, zorder=2)
+    ax.axhline( 2, color=PALETTE["lane"]["stroke"], linewidth=1.2, linestyle="--", alpha=0.6, zorder=2)
+    # Lane labels: x pinned to axes (so they stay on-screen as camera scrolls),
+    # y in data coordinates (so they sit at the correct lane centre).
+    _blend = blended_transform_factory(ax.transAxes, ax.transData)
+    ax.text(0.02,  0.0, "Lane 1", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
+    ax.text(0.02,  4.0, "Lane 2", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
 
-    # Dynamic Actors
-    (ego_dot,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8, label="Ego")
-    (ego_trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], alpha=0.3)
-    (plan_line,) = ax.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, label="Plan")
-    # Uncertainty Ellipse
-    ego_cov_patch = patches.Ellipse((0,0), width=0, height=0, angle=0, facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.2, label="Uncertainty")
+    # Dynamic actors
+    (ego_dot,)   = ax.plot([], [], color=PALETTE["ego"]["stroke"],  marker="o", markersize=8, label="Ego",    zorder=10)
+    (ego_trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"],  alpha=0.4, linewidth=1.5,                  zorder=9)
+    (plan_line,) = ax.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, linewidth=1.5,
+                           label="Plan", zorder=8)
+    ego_cov_patch = patches.Ellipse(
+        (0, 0), width=0, height=0, angle=0,
+        facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
+        alpha=0.2, label="Uncertainty", zorder=7,
+    )
     ax.add_patch(ego_cov_patch)
-    
-    obs_rect = patches.Rectangle((0,0), 0, 0, facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], alpha=0.8, label="Other Car")
+    # Obstacle — initialise at its true t=0 position
+    obs_rect = patches.Rectangle(
+        (obs_x_global[0] - 1.25, obs_y_global[0] - 0.75), 2.5, 1.5,
+        facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
+        alpha=0.8, label="Other Car", zorder=9,
+    )
     ax.add_patch(obs_rect)
-    ax.legend(loc="upper left")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.set_xlim(-3, 25)
+    ax.set_ylim(-3, 7)
 
+    # --- MPC Loop ---
     for t in range(T_SIM):
-        # Build local environment for this MPC window
+        ego_pos = curr_mean.cpu().numpy()
+        curr_x  = ego_pos[0]
+
+        # Local environment per window.
         env_local = Environment(device=device)
-        env_local.set_goal(x_range=[0.0, 60.0], y_range=[3.0, 5.0])
-        env_local.set_bounds(x_range=[-100.0, 100.0], y_range=[-2.0, 6.0])
+
+        # Goal: Fill the entire lane (Lane 2: y in [2, 6])
+        # We set a long x-range ahead to encourage forward motion via the distance heuristic,
+        # but the wide y-range ensures high probability of satisfaction even with uncertainty.
+        goal_dist = 10.0
+        goal_x_lo = curr_x + goal_dist
+        goal_x_hi = curr_x + goal_dist + 60.0
+        env_local.set_goal(x_range=[goal_x_lo, goal_x_hi], y_range=[2.1, 5.9])
+
+        # Bounds: If we have successfully merged (y > 2.5), lock the bottom bound
+        # to prevent drifting back to Lane 1.
+        y_min_bound = -1.5
+        if curr_mean[1] > 2.5:
+             y_min_bound = 2.0
+        env_local.set_bounds(x_range=[-100.0, 200.0], y_range=[y_min_bound, 6.0])
 
         # Slice moving obstacle trajectory for this window
         idx_end = t + H + 1
@@ -436,7 +468,7 @@ def run_lane_change():
             sl_x = obs_x_global[t:idx_end]
             sl_y = obs_y_global[t:idx_end]
         else:
-            pad = idx_end - len(obs_x_global)
+            pad  = idx_end - len(obs_x_global)
             sl_x = np.concatenate([obs_x_global[t:], np.full(pad, obs_x_global[-1])])
             sl_y = np.concatenate([obs_y_global[t:], np.full(pad, obs_y_global[-1])])
         env_local.add_moving_obstacle(sl_x, sl_y, width=2.5, height=1.5)
@@ -459,7 +491,9 @@ def run_lane_change():
         # Execute first action (receding horizon)
         u_curr = p_u[0]
         pred_mean, next_cov = dynamics.step(curr_mean, curr_cov, u_curr)
-        noise = torch.distributions.MultivariateNormal(torch.zeros_like(pred_mean), dynamics.Q).sample()
+        noise = torch.distributions.MultivariateNormal(
+            torch.zeros_like(pred_mean), dynamics.Q
+        ).sample()
         next_mean = pred_mean + noise
 
         real_mean_trace.append(next_mean)
@@ -467,58 +501,68 @@ def run_lane_change():
         real_u_trace.append(u_curr)
 
         curr_mean = next_mean
-        curr_cov = next_cov
+        curr_cov  = next_cov
 
         obs_pos = np.array([obs_x_global[t], obs_y_global[t]])
         ego_pos = curr_mean.cpu().numpy()
-        dist = np.linalg.norm(ego_pos[:2] - obs_pos)
+        dist    = np.linalg.norm(ego_pos[:2] - obs_pos)
 
         if t % 5 == 0:
-            print(f"Step {t:03d} | Ego: [{ego_pos[0]:.2f}, {ego_pos[1]:.2f}] | Obs: [{obs_pos[0]:.2f}, {obs_pos[1]:.2f}] | Dist: {dist:.2f}")
+            print(
+                f"Step {t:03d} | Ego: [{ego_pos[0]:.2f}, {ego_pos[1]:.2f}]"
+                f" vx={ego_pos[2]:.2f} vy={ego_pos[3]:.2f} | "
+                f"Obs x={obs_pos[0]:.2f} | Dist: {dist:.2f} | P(φ)={p_val:.3f}"
+            )
 
-        # Update Live Plot
+        # Update live plot — camera scrolls with ego, keeping obs in view
         ego_x, ego_y = ego_pos[0], ego_pos[1]
+        view_center = (ego_x + obs_pos[0]) / 2.0
+        ax.set_xlim(view_center - 14, view_center + 14)
         ego_dot.set_data([ego_x], [ego_y])
-        
-        # Update Trail
-        path_x = [m[0].item() for m in real_mean_trace]
-        path_y = [m[1].item() for m in real_mean_trace]
-        ego_trail.set_data(path_x, path_y)
+        ego_trail.set_data(
+            [m[0].item() for m in real_mean_trace],
+            [m[1].item() for m in real_mean_trace],
+        )
 
         pos_cov_np = curr_cov[:2, :2].cpu().numpy()
         vals, vecs = np.linalg.eigh(pos_cov_np)
         order = vals.argsort()[::-1]
         theta = np.degrees(np.arctan2(*vecs[:, order][:, 0][::-1]))
-        w, h = 2 * 2.45 * np.sqrt(vals[order])
+        w_e, h_e = 2 * 2.45 * np.sqrt(vals[order])
         ego_cov_patch.set_center((ego_x, ego_y))
-        ego_cov_patch.set_width(w); ego_cov_patch.set_height(h); ego_cov_patch.set_angle(theta)
+        ego_cov_patch.set_width(w_e)
+        ego_cov_patch.set_height(h_e)
+        ego_cov_patch.set_angle(theta)
 
         plan_np = p_mean.detach().cpu().squeeze().numpy()
         plan_line.set_data(plan_np[:, 0], plan_np[:, 1])
-
-        obs_rect.set_xy((obs_pos[0]-1.25, obs_pos[1]-0.75))
-        obs_rect.set_width(2.5)
-        obs_rect.set_height(1.5)
+        obs_rect.set_xy((obs_pos[0] - 1.25, obs_pos[1] - 0.75))
 
         plt.draw()
         plt.pause(0.001)
 
-        if ego_pos[0] > 28.0 and 3.0 < ego_pos[1] < 5.0:
-            print("Goal Reached!")
+        # Success: stably inside Lane 2 for 15 consecutive steps
+        if 3.0 <= ego_pos[1] <= 5.5:
+            success_counter += 1
+        else:
+            success_counter = 0
+
+        if success_counter >= 15:
+            print(f"Lane change completed successfully at step {t}!")
             break
 
     plt.ioff()
     plt.close(fig)
 
-    # Truncate moving obstacle trajectory to actual simulation length
+    # Truncate obstacle trajectory to actual simulation length
     actual_steps = len(real_mean_trace)
     for obs in env_global.moving_obstacles:
         obs["x_traj"] = obs["x_traj"][:actual_steps]
         obs["y_traj"] = obs["y_traj"][:actual_steps]
 
     full_mean_trace = torch.stack(real_mean_trace).unsqueeze(0)
-    full_cov_trace = torch.stack(real_cov_trace).unsqueeze(0)
-    full_u_trace = torch.stack(real_u_trace).unsqueeze(0)
+    full_cov_trace  = torch.stack(real_cov_trace).unsqueeze(0)
+    full_u_trace    = torch.stack(real_u_trace).unsqueeze(0)
 
     check_collision(full_mean_trace, env_global)
 
@@ -541,8 +585,8 @@ def run_lane_change():
         plan_traces=all_plans,
         step=4,
         robot_dims=(2.0, 1.0),
-        title="Lane Change Scenario",
-        bounds=([-5, 35], [-4, 8]),
+        title="Lane Change MPC",
+        bounds=None,
     )
 
 

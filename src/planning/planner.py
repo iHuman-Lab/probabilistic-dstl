@@ -175,6 +175,8 @@ class ProbabilisticSTLPlanner:
             # 5. Obstacle Repulsion Heuristic
             # Penalize trajectory points that are too close to obstacle centers
             loss_obs = torch.tensor(0.0, device=self.device)
+            
+            # Static Rectangular Obstacles
             for obs in self.env.obstacles:
                 ox = (obs["x"][0] + obs["x"][1]) / 2.0
                 oy = (obs["y"][0] + obs["y"][1]) / 2.0

@@ -12,7 +12,8 @@ PALETTE = {
     "obs_static": {"fill": "#d62728", "stroke": "#d62728"},  # Red
     "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},  # Red
     "lane":       {"fill": "#7f7f7f", "stroke": "#7f7f7f"},  # Gray
-    "goal":       {"fill": "#bcbd22", "stroke": "#bcbd22"},  # Olive
+    "goal":       {"fill": "#2ca02c", "stroke": "#2ca02c"},  # Green
+    "road":       {"fill": "#F2F2F7"},                        # Light Gray
 }
 
 
@@ -37,7 +38,7 @@ def animate_results(
 
     T = mean_np.shape[0]
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(12, 6))
 
     if bounds:
         ax.set_xlim(bounds[0])
@@ -50,6 +51,11 @@ def animate_results(
     ax.grid(True, alpha=0.3)
     ax.set_title(title)
 
+    # Draw Road Background
+    road_lo = min(lm["y"] for lm in env.lane_markings) if env.lane_markings else -2.0
+    road_hi = max(lm["y"] for lm in env.lane_markings) if env.lane_markings else  6.0
+    ax.axhspan(road_lo, road_hi, color=PALETTE["road"]["fill"], zorder=0)
+
     # Draw Lane Markings
     for lane in env.lane_markings:
         lx = lane["x"]
@@ -57,22 +63,26 @@ def animate_results(
         style = "--" if lane["style"] == "dashed" else "-"
         ax.plot(lx, [ly, ly], color=PALETTE["lane"]["stroke"], linestyle=style, linewidth=2, alpha=0.7)
 
-    # Draw Goal
+    # Draw Goal — use axhspan for wide lane goals, rectangle for small regions
     if env.goal:
         gx = env.goal["x"]
         gy = env.goal["y"]
-        ax.add_patch(
-            patches.Rectangle(
-                (gx[0], gy[0]),
-                gx[1] - gx[0],
-                gy[1] - gy[0],
-                facecolor=PALETTE["goal"]["fill"],
-                edgecolor=PALETTE["goal"]["stroke"],
-                alpha=0.3,
-                label="Goal Lane",
-                zorder=5,
+        if gx[1] - gx[0] > 50:
+            # Wide range = target lane: highlight with horizontal band
+            ax.axhspan(gy[0], gy[1], color=PALETTE["goal"]["fill"], alpha=0.25, zorder=1, label="Target Lane")
+        else:
+            ax.add_patch(
+                patches.Rectangle(
+                    (gx[0], gy[0]),
+                    gx[1] - gx[0],
+                    gy[1] - gy[0],
+                    facecolor=PALETTE["goal"]["fill"],
+                    edgecolor=PALETTE["goal"]["stroke"],
+                    alpha=0.3,
+                    label="Goal",
+                    zorder=5,
+                )
             )
-        )
 
     # Draw Visit Regions
     for region in env.visit_regions:

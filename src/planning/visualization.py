@@ -6,13 +6,14 @@ import torch
 
 # Tableau 10 colors
 PALETTE = {
-    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Blue
-    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Orange
-    "visit":      {"fill": "#2ca02c", "stroke": "#2ca02c"},  # Green
-    "obs_static": {"fill": "#d62728", "stroke": "#d62728"},  # Red
-    "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},  # Red
-    "lane":       {"fill": "#7f7f7f", "stroke": "#7f7f7f"},  # Gray
-    "goal":       {"fill": "#bcbd22", "stroke": "#bcbd22"},  # Olive
+    "ego":        {"fill": "#007AFF", "stroke": "#0056B3"},  # Vivid Blue
+    "plan":       {"fill": "#FF9500", "stroke": "#B36800"},  # Orange
+    "visit":      {"fill": "#34C759", "stroke": "#248A3D"},  # Green
+    "obs_static": {"fill": "#FF3B30", "stroke": "#B3261E"},  # Red
+    "obs_moving": {"fill": "#AF52DE", "stroke": "#7A399B"},  # Purple
+    "lane":       {"fill": "#8E8E93", "stroke": "#8E8E93"},  # Gray
+    "goal":       {"fill": "#34C759", "stroke": "#248A3D"},  # Green
+    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
 }
 
 
@@ -63,9 +64,9 @@ def visualize_results(
     ax.set_xlim(x_min - 1.0, x_max + 1.0)
     ax.set_ylim(y_min - 1.0, y_max + 1.0)
     ax.set_aspect("equal")
-    ax.set_xlabel("$x$ [m]", fontsize=13)
-    ax.set_ylabel("$y$ [m]", fontsize=13)
-    ax.tick_params(axis="both", labelsize=11)
+    ax.set_xlabel("$x$ [m]", fontsize=18)
+    ax.set_ylabel("$y$ [m]", fontsize=18)
+    ax.tick_params(axis="both", labelsize=14)
     ax.set_axisbelow(True)
     ax.grid(True, alpha=0.3)
 
@@ -105,8 +106,7 @@ def visualize_results(
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     if by_label:
-        ax.legend(by_label.values(), by_label.keys(), loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
-    fig_traj.subplots_adjust(bottom=0.20)
+        ax.legend(by_label.values(), by_label.keys(), loc="upper left", bbox_to_anchor=(1.02, 1.0), ncol=1, fontsize=14, framealpha=0.95, edgecolor="#cccccc")
     plt.savefig(f"{save_prefix}_traj.pdf", bbox_inches="tight", pad_inches=0.1)
     plt.close(fig_traj)
 
@@ -115,14 +115,14 @@ def visualize_results(
     fig_ctrl, axes = plt.subplots(2, 1, figsize=(10, 5), sharex=True)
     axes[0].plot(time_steps, u_np[:, 0], color=PALETTE["ego"]["stroke"], linewidth=1.8)
     axes[0].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[0].set_ylabel("$u_x$", fontsize=13)
-    axes[0].tick_params(labelsize=11)
+    axes[0].set_ylabel("$u_x$", fontsize=16)
+    axes[0].tick_params(labelsize=14)
     axes[0].grid(True, alpha=0.35)
     axes[1].plot(time_steps, u_np[:, 1], color=PALETTE["plan"]["stroke"], linewidth=1.8)
     axes[1].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[1].set_ylabel("$u_y$", fontsize=13)
-    axes[1].set_xlabel("Time Step", fontsize=13)
-    axes[1].tick_params(labelsize=11)
+    axes[1].set_ylabel("$u_y$", fontsize=16)
+    axes[1].set_xlabel("Time Step", fontsize=16)
+    axes[1].tick_params(labelsize=14)
     axes[1].grid(True, alpha=0.35)
     plt.tight_layout()
     plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
@@ -133,14 +133,14 @@ def visualize_results(
         fig_met, ax_met = plt.subplots(figsize=(10, 4))
         if p_sat_trace is not None:
             ax_met.plot(p_sat_trace, color=PALETTE["goal"]["stroke"], marker="o", linewidth=2, markersize=4, label="$P(\\varphi)$")
-            ax_met.set_ylabel("$P(\\varphi)$", fontsize=13)
+            ax_met.set_ylabel("$P(\\varphi)$", fontsize=16)
         elif history is not None:
             ax_met.plot(history, color=PALETTE["lane"]["stroke"], linewidth=2, label="Loss")
-            ax_met.set_ylabel("Loss", fontsize=13)
-        ax_met.set_xlabel("Iteration", fontsize=13)
-        ax_met.tick_params(labelsize=11)
+            ax_met.set_ylabel("Loss", fontsize=16)
+        ax_met.set_xlabel("Iteration", fontsize=16)
+        ax_met.tick_params(labelsize=14)
         ax_met.grid(True, alpha=0.35)
-        ax_met.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
+        ax_met.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=14, framealpha=0.95, edgecolor="#cccccc")
         fig_met.subplots_adjust(bottom=0.25)
         plt.savefig(f"{save_prefix}_metrics.pdf", bbox_inches="tight", pad_inches=0.1)
         plt.close(fig_met)
@@ -150,7 +150,7 @@ def _road_backdrop(ax, env):
     """Draw road background, goal lane fill, and lane markings onto ax."""
     road_lo = min(lm["y"] for lm in env.lane_markings) if env.lane_markings else -2.0
     road_hi = max(lm["y"] for lm in env.lane_markings) if env.lane_markings else  6.0
-    ax.axhspan(road_lo, road_hi, color="#ebebeb", zorder=0)
+    ax.axhspan(road_lo, road_hi, color=PALETTE["road"]["fill"], zorder=0)
     if env.goal:
         gy0, gy1 = env.goal["y"]
         ax.axhspan(gy0, gy1, color=PALETTE["goal"]["fill"], alpha=0.22, zorder=1, label="Goal Lane")
@@ -208,12 +208,21 @@ def visualize_lane_change(
     fig1, ax1 = plt.subplots(figsize=(13, 4.5))
     ax1.set_xlim(x_lo, x_hi)
     ax1.set_ylim(y_lo, y_hi)
-    ax1.set_xlabel("$x$ [m]", fontsize=13)
-    ax1.set_ylabel("$y$ [m]", fontsize=13)
-    ax1.tick_params(axis="both", labelsize=11)
+    ax1.set_xlabel("$x$ [m]", fontsize=18)
+    ax1.set_ylabel("$y$ [m]", fontsize=18)
+    ax1.tick_params(axis="both", labelsize=14)
     ax1.set_axisbelow(True)
+    ax1.set_aspect("equal")
     ax1.grid(True, alpha=0.25)
     _road_backdrop(ax1, env)
+
+    for region in env.visit_regions:
+        vx, vy = region["x"], region["y"]
+        ax1.add_patch(patches.Rectangle(
+            (vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0],
+            facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"],
+            alpha=0.22, zorder=2, label="Merge Zone",
+        ))
 
     for obs in env.obstacles:
         ax1.add_patch(patches.Rectangle(
@@ -263,9 +272,9 @@ def visualize_lane_change(
     handles, labels = ax1.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax1.legend(by_label.values(), by_label.keys(),
-               loc="upper center", bbox_to_anchor=(0.5, -0.22),
-               ncol=4, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
-    fig1.subplots_adjust(bottom=0.28)
+               loc="upper center", bbox_to_anchor=(0.5, -0.25),
+               ncol=4, fontsize=14, framealpha=0.95, edgecolor="#cccccc")
+    fig1.subplots_adjust(bottom=0.35)
     plt.savefig(f"{save_prefix}_traj.pdf", bbox_inches="tight", pad_inches=0.1)
     plt.close(fig1)
 
@@ -278,12 +287,21 @@ def visualize_lane_change(
     fig2, ax2 = plt.subplots(figsize=(13, 4.5))
     ax2.set_xlim(x_lo, x_hi)
     ax2.set_ylim(y_lo, y_hi)
-    ax2.set_xlabel("$x$ [m]", fontsize=13)
-    ax2.set_ylabel("$y$ [m]", fontsize=13)
-    ax2.tick_params(axis="both", labelsize=11)
+    ax2.set_xlabel("$x$ [m]", fontsize=18)
+    ax2.set_ylabel("$y$ [m]", fontsize=18)
+    ax2.tick_params(axis="both", labelsize=14)
     ax2.set_axisbelow(True)
+    ax2.set_aspect("equal")
     ax2.grid(True, alpha=0.25)
     _road_backdrop(ax2, env)
+
+    for region in env.visit_regions:
+        vx, vy = region["x"], region["y"]
+        ax2.add_patch(patches.Rectangle(
+            (vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0],
+            facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"],
+            alpha=0.22, zorder=2,
+        ))
 
     for obs in env.obstacles:
         ax2.add_patch(patches.Rectangle(
@@ -304,12 +322,19 @@ def visualize_lane_change(
         ax2.plot(xt[mask], yt[mask], color=PALETTE["obs_moving"]["stroke"],
                  linestyle="--", linewidth=1.2, alpha=0.35, zorder=3)
 
-    # Legend patches
-    ego_patch    = patches.Patch(facecolor=PALETTE["ego"]["fill"],       edgecolor=PALETTE["ego"]["stroke"],       linewidth=1.2, label="Ego Vehicle")
-    obs_patch    = patches.Patch(facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], linewidth=1.2, label="Other Vehicle")
-    static_patch = patches.Patch(facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], linewidth=1.2, label="Stopped Vehicle")
-    ci_patch     = patches.Patch(facecolor=PALETTE["ego"]["fill"],       edgecolor=PALETTE["ego"]["stroke"],       linewidth=0.8, alpha=0.25, label="95% CI")
-    goal_patch   = patches.Patch(facecolor=PALETTE["goal"]["fill"],      edgecolor="none",                         alpha=0.5, label="Goal Lane")
+    # Legend patches (dynamic: only include entries present in this env)
+    ego_patch  = patches.Patch(facecolor=PALETTE["ego"]["fill"],       edgecolor=PALETTE["ego"]["stroke"],       linewidth=1.2, label="Ego Vehicle")
+    obs_patch  = patches.Patch(facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], linewidth=1.2, label="Other Vehicle")
+    ci_patch   = patches.Patch(facecolor=PALETTE["ego"]["fill"],       edgecolor=PALETTE["ego"]["stroke"],       linewidth=0.8, alpha=0.25, label="95% CI")
+    goal_patch = patches.Patch(facecolor=PALETTE["goal"]["fill"],      edgecolor="none",                         alpha=0.5, label="Goal Lane")
+    legend_handles = [ego_patch, obs_patch]
+    if env.obstacles:
+        static_patch = patches.Patch(facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], linewidth=1.2, label="Stopped Vehicle")
+        legend_handles.append(static_patch)
+    if env.visit_regions:
+        visit_patch = patches.Patch(facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"], alpha=0.5, label="Merge Zone")
+        legend_handles.append(visit_patch)
+    legend_handles.extend([ci_patch, goal_patch])
 
     for ki, t in enumerate(snap_t):
         frac  = ki / (N_SNAP - 1)          # 0 → 1
@@ -337,7 +362,7 @@ def visualize_lane_change(
         ax2.annotate(
             f"$t={t_sec:.1f}\\,$s",
             xy=(ex, ey + label_y_off),
-            fontsize=8.5, ha="center", va="bottom", color=PALETTE["ego"]["stroke"],
+            fontsize=12, ha="center", va="bottom", color=PALETTE["ego"]["stroke"],
             zorder=10,
             bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.75),
         )
@@ -353,10 +378,10 @@ def visualize_lane_change(
                     linewidth=1.0, alpha=alpha, zorder=6,
                 ))
 
-    ax2.legend(handles=[ego_patch, obs_patch, static_patch, ci_patch, goal_patch],
-               loc="upper center", bbox_to_anchor=(0.5, -0.22),
-               ncol=5, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
-    fig2.subplots_adjust(bottom=0.28)
+    ax2.legend(handles=legend_handles,
+               loc="upper center", bbox_to_anchor=(0.5, -0.25),
+               ncol=len(legend_handles), fontsize=14, framealpha=0.95, edgecolor="#cccccc")
+    fig2.subplots_adjust(bottom=0.35)
     plt.savefig(f"{save_prefix}_snapshot.pdf", bbox_inches="tight", pad_inches=0.1)
     plt.close(fig2)
 
@@ -368,31 +393,31 @@ def visualize_lane_change(
 
     axes[0].plot(time_u, u_np[:, 0], color=PALETTE["ego"]["stroke"], linewidth=1.8)
     axes[0].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[0].set_ylabel("$a_x$ [m/s²]", fontsize=12)
-    axes[0].set_title("Control Inputs and Satisfaction Probability", fontsize=13, fontweight="bold")
+    axes[0].set_ylabel("$a_x$ [m/s²]", fontsize=16)
+    axes[0].set_title("Control Inputs and Satisfaction Probability", fontsize=18, fontweight="bold")
     axes[0].grid(True, alpha=0.35)
-    axes[0].tick_params(labelsize=11)
+    axes[0].tick_params(labelsize=14)
 
     axes[1].plot(time_u, u_np[:, 1], color=PALETTE["plan"]["stroke"], linewidth=1.8)
     axes[1].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[1].set_ylabel("$a_y$ [m/s²]", fontsize=12)
+    axes[1].set_ylabel("$a_y$ [m/s²]", fontsize=16)
     axes[1].grid(True, alpha=0.35)
-    axes[1].tick_params(labelsize=11)
+    axes[1].tick_params(labelsize=14)
 
     if p_sat_trace is not None:
         p_sat_arr = np.asarray(p_sat_trace)
         axes[2].plot(time_u[:len(p_sat_arr)], p_sat_arr,
                      color=PALETTE["goal"]["stroke"], linewidth=1.8,
                      marker="o", markersize=3, label="$P(\\varphi)$")
-        axes[2].axhline(0.9, color="k", linewidth=0.8, linestyle="--",
-                        alpha=0.55, label="Threshold ($\\alpha = 0.90$)")
+        axes[2].axhline(0.85, color="k", linewidth=0.8, linestyle="--",
+                        alpha=0.55, label="Threshold ($\\alpha = 0.85$)")
         axes[2].set_ylim(0, 1.05)
-        axes[2].set_ylabel("$P(\\varphi)$", fontsize=12)
-        axes[2].legend(fontsize=11, loc="lower right", framealpha=0.9)
+        axes[2].set_ylabel("$P(\\varphi)$", fontsize=16)
+        axes[2].legend(fontsize=14, loc="lower right", framealpha=0.9)
         axes[2].grid(True, alpha=0.35)
-        axes[2].tick_params(labelsize=11)
+        axes[2].tick_params(labelsize=14)
 
-    axes[-1].set_xlabel("Time [s]", fontsize=12)
+    axes[-1].set_xlabel("Time [s]", fontsize=16)
     plt.tight_layout()
     plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
     plt.close(fig3)

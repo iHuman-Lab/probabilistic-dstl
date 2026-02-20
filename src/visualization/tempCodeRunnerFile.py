@@ -1,0 +1,2 @@
+
+    plt.close(fig3)
