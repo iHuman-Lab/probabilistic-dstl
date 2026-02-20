@@ -166,7 +166,7 @@ def plot_piecewise_stl(
     )
 
     a, b = interval if interval else [0, 1]
-    op_symbol = "□" if operator_type == "always" else "◇"
+    op_symbol = "" if operator_type == "always" else "◇"
 
     signal_color = _GRAY
     bound_color = _BLUE
@@ -174,13 +174,11 @@ def plot_piecewise_stl(
     lower_color = _BLUE
     upper_color = _RED
 
-    # Figure
-    fig, axes = plt.subplots(3, 1, figsize=figsize)
-
     # -------------------------------------------------------------------------
     # Panel (a): Signal Trajectory - Step function
     # -------------------------------------------------------------------------
-    ax1 = axes[0]
+    fig1, ax1 = plt.subplots(figsize=(10, 4))
+    ax1.set_facecolor("#F2F2F7")
 
     if mean_trace is not None and sigma_trace is not None:
         for i in range(T):
@@ -213,7 +211,7 @@ def plot_piecewise_stl(
                     lw=2,
                 )
 
-            ax1.plot(time[i], mean_trace[i], "o", color=_GRAY, markersize=6)
+            ax1.plot(time[i], mean_trace[i], "o", markersize=6)
 
         ax1.axhline(threshold, color=threshold_color, ls="--", lw=1.5)
 
@@ -226,30 +224,30 @@ def plot_piecewise_stl(
                 textcoords="offset points",
                 xytext=(0, offset),
                 ha="center",
-                fontsize=10,
+                fontsize=14,
             )
 
         ax1.annotate(
             f"h = {int(threshold)}",
             (time[-1] + 0.3, threshold),
-            fontsize=10,
+            fontsize=14,
             color=threshold_color,
         )
 
-    ax1.set_ylabel("x(t)", fontsize=11)
-    ax1.set_title(
-        "(a) Signal Trajectory with Uncertainty μ ± σ",
-        loc="left",
-        fontsize=11,
-        fontweight="bold",
-    )
+    ax1.set_ylabel("x(t)", fontsize=18)
     ax1.set_xlim(-0.3, time[-1] + 1)
+    ax1.tick_params(axis='both', which='major', labelsize=14)
     ax1.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fig1.savefig("piecewise_signal.pdf", bbox_inches="tight")
+    plt.close(fig1)
 
     # -------------------------------------------------------------------------
     # Panel (b): Predicate P(x ≥ h) - Step function
     # -------------------------------------------------------------------------
-    ax2 = axes[1]
+    fig2, ax2 = plt.subplots(figsize=(10, 4))
+    ax2.set_facecolor("#F2F2F7")
 
     if pred is not None:
         for i in range(T):
@@ -259,7 +257,7 @@ def plot_piecewise_stl(
             ax2.hlines(pred[i, 0], x_start, x_end, colors=lower_color, lw=2)
             ax2.hlines(pred[i, 1], x_start, x_end, colors=upper_color, lw=2)
             ax2.fill_between(
-                [x_start, x_end], pred[i, 0], pred[i, 1], alpha=0.2, color="green"
+                [x_start, x_end], pred[i, 0], pred[i, 1], alpha=0.2, color=_GREEN
             )
 
             if i < T - 1:
@@ -283,23 +281,23 @@ def plot_piecewise_stl(
             ax2.plot(time[i], pred[i, 0], "o", color=_BLUE, markersize=5)
             ax2.plot(time[i], pred[i, 1], "o", color=_RED,  markersize=5)
 
-    ax2.set_ylabel("P(φ)", fontsize=11)
+    ax2.set_ylabel("P(φ)", fontsize=18)
     ax2.set_ylim(-0.05, 1.05)
-    ax2.set_title(
-        f"(b) Predicate Probability P(x ≥ {int(threshold)})",
-        loc="left",
-        fontsize=11,
-        fontweight="bold",
-    )
-    ax2.plot([], [], color=_BLUE, lw=2, label="$P_{\\mathrm{lower}}$")
+
+    ax2.plot([], [], color=_BLUE, lw=2, label="$r'P_{\downarrow}}$")
     ax2.plot([], [], color=_RED,  lw=2, label="$P_{\\mathrm{upper}}$")
-    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize=9, framealpha=0.95)
+    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2, fontsize=14, framealpha=0.95)
     ax2.set_xlim(-0.3, time[-1] + 1)
+    ax2.tick_params(axis='both', which='major', labelsize=14)
     ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    fig2.savefig("piecewise_predicate.pdf", bbox_inches="tight")
+    plt.close(fig2)
 
     # Panel (c): Operator  Step function
-
-    ax3 = axes[2]
+    fig3, ax3 = plt.subplots(figsize=(10, 4))
+    ax3.set_facecolor("#F2F2F7")
 
     for i in range(T):
         x_start = time[i]
@@ -308,7 +306,7 @@ def plot_piecewise_stl(
         ax3.hlines(oper[i, 0], x_start, x_end, colors=lower_color, lw=2)
         ax3.hlines(oper[i, 1], x_start, x_end, colors=upper_color, lw=2)
         ax3.fill_between(
-            [x_start, x_end], oper[i, 0], oper[i, 1], alpha=0.2, color="green"
+            [x_start, x_end], oper[i, 0], oper[i, 1], alpha=0.2, color=_GREEN
         )
 
         if i < T - 1:
@@ -332,28 +330,19 @@ def plot_piecewise_stl(
         ax3.plot(time[i], oper[i, 0], "o", color=_BLUE, markersize=5)
         ax3.plot(time[i], oper[i, 1], "o", color=_RED,  markersize=5)
 
-    ax3.set_xlabel("Time t", fontsize=11)
-    ax3.set_ylabel(f"P({op_symbol}φ)", fontsize=11)
+    ax3.set_xlabel("Time t", fontsize=18)
+    ax3.set_ylabel(f"P({op_symbol}φ)", fontsize=18)
     ax3.set_ylim(-0.05, 1.05)
-    ax3.set_title(
-        f"(c) {operator_type.capitalize()} Operator {op_symbol}[{a},{b}](x ≥ {int(threshold)})",
-        loc="left",
-        fontsize=11,
-        fontweight="bold",
-    )
     ax3.plot([], [], color=_BLUE, lw=2, label=f"${op_symbol}P_{{\\mathrm{{lower}}}}$")
     ax3.plot([], [], color=_RED,  lw=2, label=f"${op_symbol}P_{{\\mathrm{{upper}}}}$")
-    ax3.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize=9, framealpha=0.95)
+    ax3.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2, fontsize=14, framealpha=0.95)
     ax3.set_xlim(-0.3, time[-1] + 1)
     ax3.set_xticks(time)
+    ax3.tick_params(axis='both', which='major', labelsize=14)
     ax3.grid(True, alpha=0.3)
 
     plt.tight_layout()
+    fig3.savefig("piecewise_stl.pdf", bbox_inches="tight")
+    plt.close(fig3)
 
-    if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"Plot saved to: {save_path}")
-
-    plt.show()
-
-    return fig, axes
+    return None, None
