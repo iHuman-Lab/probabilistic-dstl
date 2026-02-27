@@ -55,17 +55,37 @@ def visualize_results(
         y_min = min(y_min, lane["y"])
         y_max = max(y_max, lane["y"])
     if env.goal:
+        x_min = min(x_min, env.goal["x"][0])
         x_max = max(x_max, env.goal["x"][1])
+        y_min = min(y_min, env.goal["y"][0])
         y_max = max(y_max, env.goal["y"][1])
 
+    for obs in env.obstacles:
+        x_min = min(x_min, obs["x"][0])
+        x_max = max(x_max, obs["x"][1])
+        y_min = min(y_min, obs["y"][0])
+        y_max = max(y_max, obs["y"][1])
+
+    for obs in env.circle_obstacles:
+        x_min = min(x_min, obs["center"][0] - obs["radius"])
+        x_max = max(x_max, obs["center"][0] + obs["radius"])
+        y_min = min(y_min, obs["center"][1] - obs["radius"])
+        y_max = max(y_max, obs["center"][1] + obs["radius"])
+
+    for region in env.visit_regions:
+        x_min = min(x_min, region["x"][0])
+        x_max = max(x_max, region["x"][1])
+        y_min = min(y_min, region["y"][0])
+        y_max = max(y_max, region["y"][1])
+
     # --- Trajectory ---
-    fig_traj, ax = plt.subplots(figsize=(8, 8))
+    fig_traj, ax = plt.subplots(figsize=(10, 10))
     ax.set_xlim(x_min - 1.0, x_max + 1.0)
     ax.set_ylim(y_min - 1.0, y_max + 1.0)
     ax.set_aspect("equal")
-    ax.set_xlabel("$x$ [m]", fontsize=18)
-    ax.set_ylabel("$y$ [m]", fontsize=18)
-    ax.tick_params(axis="both", labelsize=14)
+    ax.set_xlabel("$x$ [m]", fontsize=20, fontweight='bold')
+    ax.set_ylabel("$y$ [m]", fontsize=20, fontweight='bold')
+    ax.tick_params(axis="both", labelsize=16)
     ax.set_axisbelow(True)
     ax.grid(True, alpha=0.3)
 
@@ -75,18 +95,20 @@ def visualize_results(
 
     if env.goal:
         gx, gy = env.goal["x"], env.goal["y"]
-        ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.3, label="Goal"))
+        ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.4, label="Goal"))
+        ax.text((gx[0] + gx[1]) / 2, (gy[0] + gy[1]) / 2, "G", fontsize=24, fontweight='bold', ha='center', va='center', color=PALETTE["goal"]["stroke"], zorder=30)
 
     for region in env.visit_regions:
         vx, vy = region["x"], region["y"]
-        ax.add_patch(patches.Rectangle((vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0], facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"], alpha=0.3, label="Visit Region"))
+        ax.add_patch(patches.Rectangle((vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0], facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"], alpha=0.4, label="Visit Region"))
+        ax.text((vx[0] + vx[1]) / 2, (vy[0] + vy[1]) / 2, "V", fontsize=24, fontweight='bold', ha='center', va='center', color=PALETTE["visit"]["stroke"], zorder=30)
 
     for obs in env.obstacles:
         ox, oy = obs["x"], obs["y"]
-        ax.add_patch(patches.Rectangle((ox[0], oy[0]), ox[1]-ox[0], oy[1]-oy[0], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.75, label="Obstacle"))
+        ax.add_patch(patches.Rectangle((ox[0], oy[0]), ox[1]-ox[0], oy[1]-oy[0], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.6, hatch="//", label="Obstacle"))
 
     for obs in env.circle_obstacles:
-        ax.add_patch(patches.Circle(obs["center"], obs["radius"], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.75,  label="Obstacle"))
+        ax.add_patch(patches.Circle(obs["center"], obs["radius"], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.6, hatch="//", label="Obstacle"))
 
     for obs in env.moving_obstacles:
         xt, yt = obs["x_traj"], obs["y_traj"]
@@ -98,14 +120,18 @@ def visualize_results(
         for k in range(0, len(xt), snap_step):
             ax.add_patch(patches.Rectangle((xt[k]-w/2, yt[k]-h/2), w, h, facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], alpha=0.3))
 
-    ax.plot(mean_np[:, 0], mean_np[:, 1], color=PALETTE["ego"]["stroke"], linewidth=2, alpha=0.8, label="Trajectory", zorder=25)
+    ax.plot(mean_np[:, 0], mean_np[:, 1], color=PALETTE["ego"]["stroke"], linewidth=2.5, alpha=0.9, label="Trajectory", zorder=25)
     for t in range(0, T + 1, 2):
-        plot_covariance_ellipse(ax, mean_np[t, :2], cov_np[t, :2, :2], facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.15, zorder=15, label="Uncertainty" if t == 0 else None)
+        plot_covariance_ellipse(ax, mean_np[t, :2], cov_np[t, :2, :2], facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.25, zorder=15, label="Uncertainty" if t == 0 else None)
+
+    # Add 'S' for start
+    start_pos = mean_np[0, :2]
+    ax.text(start_pos[0] - 0.5, start_pos[1], "S", fontsize=24, fontweight='bold', ha='center', va='center', color=PALETTE["ego"]["stroke"], zorder=30)
 
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     if by_label:
-        ax.legend(by_label.values(), by_label.keys(), loc="upper left", ncol=1, fontsize=16, framealpha=0.95, edgecolor="#cccccc")
+        leg = ax.legend(by_label.values(), by_label.keys(), loc="lower right", ncol=2, fontsize=18, framealpha=0.95, edgecolor="#cccccc")
     plt.savefig(f"{save_prefix}_traj.pdf", bbox_inches="tight", pad_inches=0.1)
     plt.close(fig_traj)
 
@@ -114,14 +140,14 @@ def visualize_results(
     fig_ctrl, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
     axes[0].plot(time_steps, u_np[:, 0], color=PALETTE["ego"]["stroke"], linewidth=1.8)
     axes[0].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[0].set_ylabel("$u_x$", fontsize=16)
-    axes[0].tick_params(labelsize=14)
+    axes[0].set_ylabel("$u_x$", fontsize=18, fontweight='bold')
+    axes[0].tick_params(labelsize=16)
     axes[0].grid(True, alpha=0.35)
     axes[1].plot(time_steps, u_np[:, 1], color=PALETTE["plan"]["stroke"], linewidth=1.8)
     axes[1].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[1].set_ylabel("$u_y$", fontsize=16)
-    axes[1].set_xlabel("Time Step", fontsize=16)
-    axes[1].tick_params(labelsize=14)
+    axes[1].set_ylabel("$u_y$", fontsize=18, fontweight='bold')
+    axes[1].set_xlabel("Time Step", fontsize=18, fontweight='bold')
+    axes[1].tick_params(labelsize=16)
     axes[1].grid(True, alpha=0.35)
     plt.tight_layout()
     plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
@@ -132,14 +158,14 @@ def visualize_results(
         fig_met, ax_met = plt.subplots(figsize=(8, 3.2))
         if p_sat_trace is not None:
             ax_met.plot(p_sat_trace, color=PALETTE["goal"]["stroke"], marker="o", linewidth=2, markersize=4, label=r"$P_{\downarrow}(\varphi)$")
-            ax_met.set_ylabel(r"$P_{\downarrow}(\varphi)$", fontsize=16)
+            ax_met.set_ylabel(r"$P_{\downarrow}(\varphi)$", fontsize=18, fontweight='bold')
         elif history is not None:
             ax_met.plot(history, color=PALETTE["lane"]["stroke"], linewidth=2, label="Loss")
-            ax_met.set_ylabel("Loss", fontsize=16)
-        ax_met.set_xlabel("Iteration", fontsize=16)
-        ax_met.tick_params(labelsize=14)
+            ax_met.set_ylabel("Loss", fontsize=18, fontweight='bold')
+        ax_met.set_xlabel("Iteration", fontsize=18, fontweight='bold')
+        ax_met.tick_params(labelsize=16)
         ax_met.grid(True, alpha=0.35)
-        ax_met.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=14, framealpha=0.95, edgecolor="#cccccc")
+        ax_met.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, fontsize=16, framealpha=0.95, edgecolor="#cccccc")
         fig_met.subplots_adjust(bottom=0.25)
         plt.savefig(f"{save_prefix}_metrics.pdf", bbox_inches="tight", pad_inches=0.1)
         plt.close(fig_met)

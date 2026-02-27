@@ -65,7 +65,7 @@ def check_collision(mean_trace, env):
     print("=" * 30 + "\n")
 
 
-def run_single_shot(max_iterations=1000, load_from=None):
+def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
     # Detect device (GPU if available)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -80,24 +80,24 @@ def run_single_shot(max_iterations=1000, load_from=None):
     env = Environment(device=device)
 
     # Scenario: Reach (3.5, 10.5)
-    env.set_goal(x_range=[6.0, 8.0], y_range=[7.0, 9.0])
-    env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 9.5])
+    env.set_goal(x_range=[8.0, 10.0], y_range=[2.0, 4.0])
+    env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 10.5])
     
 
    # Add a visit region (waypoint)
-    env.add_visit_region(x_range=[8.5, 11.5], y_range=[3.0, 6.0])
+    env.add_visit_region(x_range=[6.0, 8.0], y_range=[7.0, 9.0])
 
     # Add obstacles 
     # 1. Rectangle obstacle
-    env.add_obstacle(x_range=[0.0, 2.0], y_range=[3.0, 6.0])
-    env.add_obstacle(x_range=[3.5, 5.5], y_range=[0.0, 2.0])
-    #env.add_obstacle(x_range=[5.7.0], y_range=[0.0, 2.0])
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[0.0, 3.0])
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[4.0, 7.0])
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[7.5, 10.0])
 
 
     # 2. Circle obstacle
-    env.add_circle_obstacle(center=[5.0, 5.0], radius=1.9)
+    #env.add_circle_obstacle(center=[5.0, 5.0], radius=1.9)
 
-    if load_from and os.path.exists(load_from):
+    if not force_run and load_from and os.path.exists(load_from):
         print(f"Loading results from {load_from}...")
         data = torch.load(load_from, map_location=device)
         mean_trace = data["mean_trace"]
@@ -108,50 +108,36 @@ def run_single_shot(max_iterations=1000, load_from=None):
         print(f"Loaded data. Final Satisfaction Probability: {best_p:.4f}")
     else:
         # --- Setup Dynamics ---
-        dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.02, device=device)
+        dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.03, device=device)
         
         # --- Planner Config ---
         # Configuration for the gradient descent
         planner_cfg = {
-            "w_u": 0.1,  # Reduced weight to allow higher speeds
-            "w_du": 0.6,  # Weight on smoothness
+            "w_u": 0.9,  # Reduced weight to allow higher speeds
+            "w_u": 0.5,  # Reduced weight to allow higher speeds
+            "w_du": 0.01,  # Weight on smoothness
             "w_phi": 100.0,  # Weight on STL satisfaction
             "lr": 0.05,  # Learning rate
             "max_iters": max_iterations,  # Max iterations
             "alpha": 0.95,  # Success threshold
             "w_dist": 50.0,  # Goal guidance heuristic weight
             "w_obs": 3.0,  # Obstacle repulsion heuristic weight
-            "w_visit": 40.0,  # Visit region heuristic weight
+            "w_visit": 50.0,  # Visit region heuristic weight
         }
         planner = ProbabilisticSTLPlanner(dynamics, env, T, config=planner_cfg)
 
         # --- Initial Condition ---
         # Start at (0,0) with small uncertainty
-        x0_mean = torch.tensor([0.0, 0.0], device=device)
+        x0_mean = torch.tensor([0.0, 6.0], device=device)
         x0_cov = torch.eye(2, device=device) * 0.01
 
-        # --- Smart Initialization ---
-        # Create a guess that goes to Visit Region first, then Goal
-        # Split time: 65% to reach Visit (further away), 35% to reach Goal
-        t_split = int(0.65 * T)
-        
-        # Leg 1: Start -> Visit (10.0, 4.5)
-        vel_1 = torch.tensor([10.0, 4.5], device=device) / (t_split * dt)
-        # Leg 2: Visit -> Goal (6.0, 8.0)
-        vel_2 = torch.tensor([6.0 - 10.0, 8.0 - 4.5], device=device) / ((T - t_split) * dt)
-        
-        u_guess = torch.zeros(T, 2, device=device)
-        u_guess[:t_split] = vel_1
-        u_guess[t_split:] = vel_2
-        
-        # Clamp to u_max just in case
-        u_guess = torch.clamp(u_guess, -0.95, 0.95)
-
-        print("Initializing Probabilistic STL Motion Planning with Smart Guess...")
+        # --- Initialization ---
+        # We pass init_guess=None to let the optimizer figure out the path
+        print("Initializing Probabilistic STL Motion Planning...")
 
         # Run optimization
         mean_trace, cov_trace, u_trace, best_p, history = planner.solve(
-            x0_mean, x0_cov, render=True, init_guess=u_guess
+            x0_mean, x0_cov, render=True, init_guess=None
         )
 
         print("\nOptimization Complete.")
@@ -168,11 +154,11 @@ def run_single_shot(max_iterations=1000, load_from=None):
         mean_trace, cov_trace, env, 
         filename="single_shot_animation.gif", step=2,
         title="Single Shot Planning",
-        bounds=([-2, 12], [-2, 12])
+        bounds=([-1, 13], [-1, 11])
     )
 
 
-def run_mpc(load_from=None):
+def run_mpc(load_from=None, force_run=False):
     # --- 1. Configuration ---
     # Detect device (GPU if available)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -199,7 +185,7 @@ def run_mpc(load_from=None):
     if load_from is None:
         load_from = os.path.join(RESULTS_DIR, "mpc.pt")
 
-    if os.path.exists(load_from):
+    if not force_run and os.path.exists(load_from):
         print(f"Loading MPC results from {load_from}...")
         data = torch.load(load_from, map_location=device)
         full_mean_trace = data["mean_trace"]
@@ -878,26 +864,74 @@ def run_lane_change_aggressive(load_from=None):
         plt.close(fig)
 
 
-def run_paper_comparison(load_from=None):
+def _check_trace_success(trace, env):
+    """
+    Returns True if the single trace satisfies all constraints (Goal, Visit, Obstacles).
+    trace: [T+1, 2] numpy array
+    """
+    # 1. Check Obstacles (Safety) - Must be safe at ALL times
+    for t in range(len(trace)):
+        pos = trace[t]
+        # Rectangles
+        for obs in env.obstacles:
+            if (obs["x"][0] <= pos[0] <= obs["x"][1]) and (obs["y"][0] <= pos[1] <= obs["y"][1]):
+                return False # Collision
+        # Circles
+        for obs in env.circle_obstacles:
+            if np.linalg.norm(pos - obs["center"]) <= obs["radius"]:
+                return False
+
+    # 2. Check Visit Region (Liveness) - Must visit at LEAST once
+    visited = False
+    if not env.visit_regions:
+        visited = True
+    else:
+        for t in range(len(trace)):
+            pos = trace[t]
+            for reg in env.visit_regions:
+                if (reg["x"][0] <= pos[0] <= reg["x"][1]) and (reg["y"][0] <= pos[1] <= reg["y"][1]):
+                    visited = True
+                    break
+            if visited: break
+    if not visited: return False
+
+    # 3. Check Goal (Liveness) - Must be in goal at LAST step (or eventually, depending on spec)
+    # For this scenario, we usually require being in goal at the end.
+    if env.goal:
+        final_pos = trace[-1]
+        if not ((env.goal["x"][0] <= final_pos[0] <= env.goal["x"][1]) and 
+                (env.goal["y"][0] <= final_pos[1] <= env.goal["y"][1])):
+            return False
+
+    return True
+
+
+def run_paper_comparison(load_from=None, force_run=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     T = 80
+    T = 100
     dt = 0.2
+    MC_SAMPLES = 100  # Number of Monte Carlo simulations
 
+    # --- Setup Environment (Same as Single Shot) ---
     env = Environment(device=device)
-    env.set_goal(x_range=[8.0, 10.0], y_range=[9.5, 11.5])
-    env.add_obstacle(x_range=[0.0, 3.0], y_range=[2.0, 4.0])
-    env.add_obstacle(x_range=[4.0, 6.0], y_range=[2.0, 4.0])
-    env.add_obstacle(x_range=[3.0, 100.0], y_range=[6.0, 8.0])
+    env.set_goal(x_range=[9.0, 11.0], y_range=[2.0, 4.0])
+    env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 10.5])
+    env.add_visit_region(x_range=[7.0, 9.0], y_range=[7.0, 9.0])
+    
+    # Obstacles
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[0.0, 3.0])
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[4.0, 7.0])
+    env.add_obstacle(x_range=[3.0, 6.0], y_range=[7.5, 10.0])
 
-    # Start aligned with the narrow gap (x=1.5) to highlight divergent routing
-    x0_mean = torch.tensor([1.5, 0.0], device=device)
+    x0_mean = torch.tensor([0.0, 5.0], device=device)
 
     if load_from is None:
         load_from = os.path.join(RESULTS_DIR, "paper_comparison.pt")
 
-    if os.path.exists(load_from):
+    if not force_run and os.path.exists(load_from):
         print(f"Loading Paper Comparison results from {load_from}...")
         data = torch.load(load_from, map_location=device)
         mu_det = data["mu_det"]
@@ -908,21 +942,36 @@ def run_paper_comparison(load_from=None):
     else:
         print("Running Deterministic Baseline...")
         dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.0, device=device)
+        # --- 1. Deterministic Baseline (Naive) ---
+        # We use a very small q_std to mimic a deterministic planner that assumes perfect execution.
+        print("\n--- Running Deterministic Baseline (Naive) ---")
+        dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.001, device=device)
         planner_det = ProbabilisticSTLPlanner(dyn_det, env, T, config={
             "w_u": 0.1, "w_du": 0.1, "w_phi": 1000.0, "lr": 0.02, "max_iters": 500,
             "w_dist": 5.0, "w_obs": 1.0, "alpha": 0.99,
+            "w_u": 0.5, "w_du": 0.01, "w_phi": 100.0, "lr": 0.05, "max_iters": 1000,
+            "w_dist": 50.0, "w_obs": 3.0, "w_visit": 50.0, "alpha": 0.99,
         })
         x0_cov_det = torch.eye(2, device=device) * 1e-6
         mu_det, _, u_det, _, _ = planner_det.solve(x0_mean, x0_cov_det, render=False, verbose=True)
+        x0_cov_det = torch.eye(2, device=device) * 0.0001
+        mu_det, _, u_det, _, _ = planner_det.solve(x0_mean, x0_cov_det, render=False, verbose=True, init_guess=None)
 
         print("Running Probabilistic Framework...")
         dyn_prob = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.08, device=device)
+        # --- 2. Probabilistic Planner (Ours) ---
+        # We use the TRUE noise (q_std=0.05) in the planning model.
+        print("\n--- Running Probabilistic Planner (Ours) ---")
+        dyn_prob = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.05, device=device)
         planner_prob = ProbabilisticSTLPlanner(dyn_prob, env, T, config={
             "w_u": 0.1, "w_du": 0.1, "w_phi": 1000.0, "lr": 0.02, "max_iters": 500,
             "w_dist": 5.0, "w_obs": 1.0, "alpha": 0.95,
+            "w_u": 0.5, "w_du": 0.01, "w_phi": 100.0, "lr": 0.05, "max_iters": 1000,
+            "w_dist": 50.0, "w_obs": 3.0, "w_visit": 50.0, "alpha": 0.95,
         })
         x0_cov_prob = torch.eye(2, device=device) * 0.01
         mu_prob, cov_prob, u_prob, _, _ = planner_prob.solve(x0_mean, x0_cov_prob, render=False, verbose=True)
+        mu_prob, cov_prob, u_prob, _, _ = planner_prob.solve(x0_mean, x0_cov_prob, render=False, verbose=True, init_guess=None)
 
         torch.save({
             "mu_det": mu_det,
@@ -933,6 +982,41 @@ def run_paper_comparison(load_from=None):
         }, load_from)
         print(f"Results saved to {load_from}")
 
+    # --- 3. Monte Carlo Simulation ---
+    print(f"\n--- Running Monte Carlo Validation (N={MC_SAMPLES}) ---")
+    # True Dynamics
+    true_q_std = 0.05
+    
+    def run_mc(u_seq, name):
+        success_count = 0
+        traces = []
+        for i in range(MC_SAMPLES):
+            # Rollout with noise
+            # We can use the dynamics forward pass but we need to inject noise manually if forward doesn't do it per step
+            # Actually SingleIntegrator.forward computes the distribution. We need sample paths.
+            # Let's do a manual loop.
+            curr_x = x0_mean.clone()
+            trace = [curr_x.cpu().numpy()]
+            
+            for t in range(T):
+                u = u_seq[t]
+                # Step with noise
+                # x_next = x + u*dt + noise
+                noise = torch.randn(2, device=device) * true_q_std
+                curr_x = curr_x + u * dt + noise
+                trace.append(curr_x.cpu().numpy())
+            
+            trace_np = np.array(trace)
+            traces.append(trace_np)
+            if _check_trace_success(trace_np, env):
+                success_count += 1
+        
+        print(f"{name} Success Rate: {success_count}/{MC_SAMPLES} ({success_count/MC_SAMPLES*100:.1f}%)")
+        return traces, success_count
+
+    det_traces, det_success = run_mc(u_det, "Deterministic Plan")
+    prob_traces, prob_success = run_mc(u_prob, "Probabilistic Plan")
+
     mu_d  = mu_det.detach().cpu().squeeze().numpy()
     mu_p  = mu_prob.detach().cpu().squeeze().numpy()
     cov_p = cov_prob.detach().cpu().squeeze().numpy()
@@ -940,37 +1024,58 @@ def run_paper_comparison(load_from=None):
     u_p   = u_prob.detach().cpu().squeeze().numpy()
 
     # --- Trajectory Comparison ---
-    fig1, ax1 = plt.subplots(figsize=(10, 6))
-    for obs in env.obstacles:
-        ax1.add_patch(patches.Rectangle(
-            (obs["x"][0], obs["y"][0]), obs["x"][1]-obs["x"][0], obs["y"][1]-obs["y"][0],
-            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"],
-            alpha=0.6, hatch="//", label="Obstacle",
-        ))
-    if env.goal:
-        gx, gy = env.goal["x"], env.goal["y"]
-        ax1.add_patch(patches.Rectangle(
-            (gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0],
-            facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.3, label="Goal",
-        ))
-    ax1.plot(mu_d[:, 0], mu_d[:, 1], color=PALETTE["lane"]["stroke"], linestyle="--", linewidth=2, label="Deterministic")
-    ax1.plot(mu_p[:, 0], mu_p[:, 1], color=PALETTE["ego"]["stroke"], linewidth=2.5, label="Probabilistic (Ours)")
+    fig1, axes = plt.subplots(1, 2, figsize=(18, 9), sharey=True)
+    
+    # Common plotting helper
+    def plot_env_and_traces(ax, traces, nominal, title, color_nominal, x0):
+        ax.set_xlim(-1, 13)
+        ax.set_ylim(-1, 11)
+        ax.set_aspect("equal")
+        ax.set_title(title, fontsize=20, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        
+        # Env
+        for obs in env.obstacles:
+            ax.add_patch(patches.Rectangle((obs["x"][0], obs["y"][0]), obs["x"][1]-obs["x"][0], obs["y"][1]-obs["y"][0], facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.6, hatch="//"))
+        if env.goal:
+            gx, gy = env.goal["x"], env.goal["y"]
+            ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.4))
+            ax.text((gx[0] + gx[1]) / 2, (gy[0] + gy[1]) / 2, "G", fontsize=24, fontweight='bold', ha='center', va='center', color=PALETTE["goal"]["stroke"], zorder=30)
+        for region in env.visit_regions:
+            vx, vy = region["x"], region["y"]
+            ax.add_patch(patches.Rectangle((vx[0], vy[0]), vx[1]-vx[0], vy[1]-vy[0], facecolor=PALETTE["visit"]["fill"], edgecolor=PALETTE["visit"]["stroke"], alpha=0.4))
+            ax.text((vx[0] + vx[1]) / 2, (vy[0] + vy[1]) / 2, "V", fontsize=24, fontweight='bold', ha='center', va='center', color=PALETTE["visit"]["stroke"], zorder=30)
+
+        # Add 'S' for start
+        start_pos = x0.cpu().numpy()
+        ax.text(start_pos[0] - 0.5, start_pos[1], "S", fontsize=24, fontweight='bold', ha='center', va='center', color='black', zorder=30)
+
+        # MC Traces
+        for tr in traces:
+            # Check if this specific trace failed? 
+            # For visual clarity, just plot them all faintly
+            ax.plot(tr[:, 0], tr[:, 1], color="gray", alpha=0.15, linewidth=0.8)
+            
+        # Nominal
+        ax.plot(nominal[:, 0], nominal[:, 1], color=color_nominal, linewidth=3.5, label="Planned Path")
+
+    # Plot Deterministic
+    plot_env_and_traces(axes[0], det_traces, mu_d, f"Deterministic Baseline\nSuccess: {det_success}%", PALETTE["lane"]["stroke"], x0_mean)
+    axes[0].set_xlabel("$x$ [m]", fontsize=18, fontweight='bold')
+    axes[0].set_ylabel("$y$ [m]", fontsize=18, fontweight='bold')
+    
+    # Plot Probabilistic
+    plot_env_and_traces(axes[1], prob_traces, mu_p, f"Probabilistic (Ours)\nSuccess: {prob_success}%", PALETTE["ego"]["stroke"], x0_mean)
+    axes[1].set_xlabel("$x$ [m]", fontsize=18, fontweight='bold')
+    # Add uncertainty ellipses to probabilistic plot
     for t in range(0, T + 1, 5):
-        plot_covariance_ellipse(ax1, mu_p[t], cov_p[t], facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.3, label="Uncertainty" if t == 0 else None)
-    ax1.set_aspect("equal")
-    ax1.set_xlim(-2, 12)
-    ax1.set_ylim(-1, 12)
-    ax1.set_xlabel("$x$ [m]", fontsize=13)
-    ax1.set_ylabel("$y$ [m]", fontsize=13)
-    ax1.tick_params(axis="both", labelsize=11)
-    ax1.set_axisbelow(True)
-    ax1.grid(True, alpha=0.3)
-    handles, labels = ax1.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax1.legend(by_label.values(), by_label.keys(), loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, fontsize=11, framealpha=0.95, edgecolor="#cccccc")
-    fig1.subplots_adjust(bottom=0.20)
-    plt.savefig("paper_comparison_traj.pdf", bbox_inches="tight", pad_inches=0.1)
+        plot_covariance_ellipse(axes[1], mu_p[t], cov_p[t], facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.35)
+
+    plt.tight_layout()
+    plt.savefig("paper_comparison_mc.pdf", bbox_inches="tight")
     plt.close(fig1)
+    print("Saved comparison plot to paper_comparison_mc.pdf")
 
     # --- Control Input Comparison ---
     t_sec = np.arange(T) * dt
