@@ -2,6 +2,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+
+# Tableau 20 colors
+PALETTE = {
+    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
+    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
+    "visit":      {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
+    "obs_static": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Red (Light/Dark)
+    "obs_moving": {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Purple (Light/Dark)
+    "lane":       {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
+    "goal":       {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
+    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
+}
+
+
 def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
     """
     Plot a trace with ±1σ bounds and highlight where the trace
@@ -29,12 +43,12 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
 
     # TRACE PLOT 
     # Main trace and uncertainty
-    ax1.plot(time, mean_trace, color="blue", linewidth=2, label="Mean Height")
+    ax1.plot(time, mean_trace, color=PALETTE["ego"]["stroke"], linewidth=2, label="Mean Height")
     ax1.fill_between(
         time,
         lower_sigma,
         upper_sigma,
-        color="blue",
+        color=PALETTE["ego"]["fill"],
         alpha=0.2,
         label="±1σ Interval",
     )
@@ -42,7 +56,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
     # Threshold line
     ax1.axhline(
         threshold,
-        color="red",
+        color=PALETTE["obs_static"]["stroke"],
         linestyle="--",
         label=f"Threshold = {threshold} m",
     )
@@ -55,7 +69,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
         y_min,
         y_max,
         where=full_violation,
-        color="red",
+        color=PALETTE["obs_static"]["fill"],
         alpha=0.1,
         label="Full violation (both bounds < threshold)",
     )
@@ -64,7 +78,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
         y_min,
         y_max,
         where=partial_violation,
-        color="orange",
+        color=PALETTE["plan"]["fill"],
         alpha=0.1,
         label="Partial violation (lower bound < threshold)",
     )
@@ -72,7 +86,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
     ax1.scatter(
         time[full_violation],
         mean_trace[full_violation],
-        color="red",
+        color=PALETTE["obs_static"]["stroke"],
         s=30,
         label="Full Violation Points",
         zorder=5,
@@ -81,7 +95,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
         time[partial_violation],
         mean_trace[partial_violation],
         facecolors="none",
-        edgecolors="orange",
+        edgecolors=PALETTE["plan"]["stroke"],
         s=40,
         label="Partial Violation Points",
         zorder=5,
@@ -98,12 +112,12 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
     robustness = lower_sigma - threshold
 
     ax2.plot(
-        time, robustness, label="Robustness ρ(t) = x(t) - h", color="blue", linewidth=2
+        time, robustness, label="Robustness ρ(t) = x(t) - h", color=PALETTE["ego"]["stroke"], linewidth=2
     )
     # Zero line (satisfaction boundary)
     ax2.axhline(
         0,
-        color="black",
+        color=PALETTE["lane"]["stroke"],
         linestyle="-",
         linewidth=2,
         label="Satisfaction Boundary (ρ=0)",
@@ -115,7 +129,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
         0,
         robustness,
         where=(robustness >= 0),
-        color="green",
+        color=PALETTE["visit"]["fill"],
         alpha=0.2,
         label="Satisfied (ρ>0)",
         interpolate=True,
@@ -126,7 +140,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
         robustness,
         0,
         where=(robustness < 0),
-        color="red",
+        color=PALETTE["obs_static"]["fill"],
         alpha=0.2,
         label="Violated (ρ<0)",
         interpolate=True,

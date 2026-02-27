@@ -4,17 +4,18 @@ import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 from matplotlib.animation import FuncAnimation
 
-# Tableau 10 colors
+# Tableau 20 colors
 PALETTE = {
-    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Blue
-    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Orange
-    "visit":      {"fill": "#2ca02c", "stroke": "#2ca02c"},  # Green
-    "obs_static": {"fill": "#d62728", "stroke": "#d62728"},  # Red
-    "obs_moving": {"fill": "#d62728", "stroke": "#d62728"},  # Red
-    "lane":       {"fill": "#7f7f7f", "stroke": "#7f7f7f"},  # Gray
-    "goal":       {"fill": "#2ca02c", "stroke": "#2ca02c"},  # Green
-    "road":       {"fill": "#F2F2F7"},                        # Light Gray
+    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
+    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
+    "visit":      {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Green (Light/Dark)
+    "obs_static": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Red (Light/Dark)
+    "obs_moving": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Purple (Light/Dark)
+    "lane":       {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
+    "goal":       {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
+    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
 }
+
 
 
 def animate_results(

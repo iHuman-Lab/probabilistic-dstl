@@ -146,7 +146,7 @@ def plot_piecewise_stl(
     formula_str=None,
     interval=None,
     operator_type="always",
-    figsize=(10, 9),
+    figsize=(10, 12),
     save_path=None,
 ):
     time = np.asarray(time)
@@ -174,11 +174,8 @@ def plot_piecewise_stl(
     lower_color = _BLUE
     upper_color = _RED
 
-    # -------------------------------------------------------------------------
-    # Panel (a): Signal Trajectory - Step function
-    # -------------------------------------------------------------------------
-    fig1, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.set_facecolor("#F2F2F7")
+    # Create one figure with 3 subplots sharing the x-axis
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=figsize, sharex=True)
 
     if mean_trace is not None and sigma_trace is not None:
         for i in range(T):
@@ -239,16 +236,6 @@ def plot_piecewise_stl(
     ax1.tick_params(axis='both', which='major', labelsize=14)
     ax1.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    fig1.savefig("piecewise_signal.pdf", bbox_inches="tight")
-    plt.close(fig1)
-
-    # -------------------------------------------------------------------------
-    # Panel (b): Predicate P(x ≥ h) - Step function
-    # -------------------------------------------------------------------------
-    fig2, ax2 = plt.subplots(figsize=(10, 4))
-    ax2.set_facecolor("#F2F2F7")
-
     if pred is not None:
         for i in range(T):
             x_start = time[i]
@@ -284,20 +271,12 @@ def plot_piecewise_stl(
     ax2.set_ylabel("P(φ)", fontsize=18)
     ax2.set_ylim(-0.05, 1.05)
 
-    ax2.plot([], [], color=_BLUE, lw=2, label="$r'P_{\downarrow}}$")
-    ax2.plot([], [], color=_RED,  lw=2, label="$P_{\\mathrm{upper}}$")
-    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2, fontsize=14, framealpha=0.95)
+    ax2.plot([], [], color=_BLUE, lw=2, label=r"$P^{\downarrow}$")
+    ax2.plot([], [], color=_RED,  lw=2, label=r"$P^{\uparrow}$")
+    ax2.legend(loc="lower right", fontsize=14, framealpha=0.95)
     ax2.set_xlim(-0.3, time[-1] + 1)
     ax2.tick_params(axis='both', which='major', labelsize=14)
     ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    fig2.savefig("piecewise_predicate.pdf", bbox_inches="tight")
-    plt.close(fig2)
-
-    # Panel (c): Operator  Step function
-    fig3, ax3 = plt.subplots(figsize=(10, 4))
-    ax3.set_facecolor("#F2F2F7")
 
     for i in range(T):
         x_start = time[i]
@@ -333,16 +312,19 @@ def plot_piecewise_stl(
     ax3.set_xlabel("Time t", fontsize=18)
     ax3.set_ylabel(f"P({op_symbol}φ)", fontsize=18)
     ax3.set_ylim(-0.05, 1.05)
-    ax3.plot([], [], color=_BLUE, lw=2, label=f"${op_symbol}P_{{\\mathrm{{lower}}}}$")
-    ax3.plot([], [], color=_RED,  lw=2, label=f"${op_symbol}P_{{\\mathrm{{upper}}}}$")
-    ax3.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2, fontsize=14, framealpha=0.95)
+    ax3.plot([], [], color=_BLUE, lw=2, label=f"${op_symbol}P^{{\\downarrow}}$")
+    ax3.plot([], [], color=_RED,  lw=2, label=f"${op_symbol}P^{{\\uparrow}}$")
+    ax3.legend(loc="lower right", fontsize=14, framealpha=0.95)
     ax3.set_xlim(-0.3, time[-1] + 1)
     ax3.set_xticks(time)
     ax3.tick_params(axis='both', which='major', labelsize=14)
     ax3.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    fig3.savefig("piecewise_stl.pdf", bbox_inches="tight")
-    plt.close(fig3)
+    if save_path:
+        fig.savefig(save_path, bbox_inches="tight")
+    else:
+        fig.savefig("piecewise_combined.pdf", bbox_inches="tight")
+    plt.close(fig)
 
-    return None, None
+    return fig, (ax1, ax2, ax3)

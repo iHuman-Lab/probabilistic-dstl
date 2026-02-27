@@ -11,7 +11,12 @@ from pdstl.base import BeliefTrajectory
 from pdstl.operators import GreaterThan, Always
 from visualization.robustness import plot_stl_formula_bounds, plot_piecewise_stl
 from utils import skip_run
-from planning.runners import run_single_shot, run_mpc, run_lane_change, run_paper_comparison
+from planning.runners import (
+    run_single_shot,
+    run_mpc,
+    run_lane_change,
+    run_paper_comparison,
+)
 from planning.visualization import PALETTE
 
 
@@ -99,11 +104,11 @@ with skip_run("skip", "Example 1: Always") as check, check():
 # EXAMPLE 2: Discrete Piecewise Signal
 # =============================================================================
 
-with skip_run("run", "Example 2: Piecewise") as check, check():
+with skip_run("skip", "Example 2: Piecewise") as check, check():
     t, mean, var = piecewise_signal()
 
     print(f"\n{'=' * 50}")
-    print("Example 3: Discrete Piecewise Signal")
+    print("Example 2: Discrete Piecewise Signal")
     print(f"{'=' * 50}")
     print("\nSignal values:")
     print(f"{'t':<4} {'μ(t)':<8} {'σ²(t)':<8} {'σ(t)':<8}")
@@ -142,7 +147,7 @@ with skip_run("run", "Example 2: Piecewise") as check, check():
 # =============================================================================
 
 with skip_run("skip", "Example 3: Single Shot Motion Planning") as check, check():
-    run_single_shot(max_iterations=1000)
+    run_single_shot(max_iterations=500)
 
 
 # =============================================================================
@@ -154,7 +159,7 @@ with skip_run("skip", "Example 4: MPC Receding Horizon") as check, check():
 # =============================================================================
 # EXAMPLE 5: Lane Change with Moving Obstacle
 # =============================================================================
-with skip_run("skip", "Example 5: Lane Change") as check, check():
+with skip_run("run", "Example 5: Lane Change") as check, check():
     run_lane_change()
 
 # =============================================================================
