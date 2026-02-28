@@ -99,13 +99,17 @@ class Environment:
 
         return preds
 
-    def get_specification(self, T, t_goal_start=0):
+    def get_specification(self, T, t_goal_start=0, t_constraints_start=1):
         """
         Generates the STL formula: phi = (Always Safe) & (Eventually Goal)
 
         Args:
             T (int): Total time horizon
             t_goal_start (int): Start time for goal satisfaction (t_g in PDF)
+            t_constraints_start (int): Start time for safety/bounds constraints.
+                Default=1 skips t=0 (the known initial state), which sits on the
+                workspace boundary (x=0.0 == x_min), so including t=0 would make
+                p_bounds = 0.5 and cap P_sat at ~0.45 regardless of plan quality.
 
         Returns:
             STL_Formula: The combined specification
@@ -127,13 +131,13 @@ class Environment:
             current_safe_formula = obs_preds[0]
             for i in range(1, len(obs_preds)):
                 current_safe_formula = And(current_safe_formula, obs_preds[i])
-            phi_safety = Always(current_safe_formula, interval=[0, T])
+            phi_safety = Always(current_safe_formula, interval=[t_constraints_start, T])
             specs.append(phi_safety)
 
         # 4. Workspace Boundary (Always stay inside)
         if self.bounds is not None:
             bounds_pred = RectangularGoalPredicate(self.bounds)
-            specs.append(Always(bounds_pred, interval=[0, T]))
+            specs.append(Always(bounds_pred, interval=[t_constraints_start, T]))
 
         if not specs:
             raise ValueError("No constraints defined in environment.")

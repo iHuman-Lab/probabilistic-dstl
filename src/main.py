@@ -148,8 +148,8 @@ with skip_run("skip", "Example 2: Piecewise") as check, check():
 # EXAMPLE 3: Single Shot Motion Planning
 # =============================================================================
 
-with skip_run("run", "Example 3: Single Shot Motion Planning") as check, check():
-    run_single_shot(max_iterations=1000, force_run=True)
+with skip_run("skip", "Example 3: Single Shot Motion Planning") as check, check():
+    run_single_shot(max_iterations=500, force_run=True)
 
 
 # =============================================================================
@@ -174,4 +174,4 @@ with skip_run("skip", "Example 6: Aggressive Lane Change") as check, check():
 # EXAMPLE 7: Single Shot Comparison Table (Probabilistic vs. STLCG)
 # =============================================================================
 with skip_run("run", "Example 7: Single Shot Comparison Table") as check, check():
-    run_single_shot_comparison(n_trials=100, force_run=True)
+    run_single_shot_comparison(n_trials=1000, force_run=True)
