@@ -52,7 +52,7 @@ class ProbabilisticSTLPlanner:
         if config:
             self.cfg.update(config)
 
-    def solve(self, x0_mean, x0_cov, render=False, verbose=True, spec=None, init_guess=None):
+    def solve(self, x0_mean, x0_cov, render=False, verbose=True, spec=None, init_guess=None, loss_fn=None):
         """
         Executes the optimization loop to find optimal controls V.
         init_guess: Optional tensor [T, 2] of control inputs to warm-start the optimization.
@@ -81,7 +81,7 @@ class ProbabilisticSTLPlanner:
             phi = self.env.get_specification(self.T)
 
         best_u = None
-        best_p = -1.0
+        best_p = -float("inf")
         best_mean = None
         best_cov = None
         history = []
@@ -156,9 +156,11 @@ class ProbabilisticSTLPlanner:
             u_diff = u_seq[1:] - u_seq[:-1]
             loss_du = torch.sum(u_diff**2) + torch.sum(u_seq[0] ** 2)
 
-            # 3. STL Satisfaction: (1 - P_all)^2
-            # Using Squared Error as per PDF (provides gradient towards 1.0)
-            loss_phi = -torch.log(p_all + 0.0001)
+            # 3. STL Satisfaction loss
+            if loss_fn is not None:
+                loss_phi = loss_fn(p_all)
+            else:
+                loss_phi = -torch.log(p_all + 0.0001)
 
             # 4. Goal Guidance Heuristic
             # Adds a gradient signal when the robot is far from the goal (P_all ~ 0)
@@ -253,8 +255,8 @@ class ProbabilisticSTLPlanner:
                 best_mean = mean_trace.detach().clone()
                 best_cov = cov_trace.detach().clone()
 
-            # Convergence Check
-            if current_p >= self.cfg["alpha"]:
+            # Convergence Check (only meaningful for probabilistic mode where alpha is a probability)
+            if loss_fn is None and current_p >= self.cfg["alpha"]:
                 converged_iters += 1
                 if converged_iters >= 50:
                     print(
