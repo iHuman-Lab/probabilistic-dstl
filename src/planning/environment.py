@@ -1,5 +1,6 @@
 import torch
-from pdstl.operators import STL_Formula, Always, Eventually, And
+
+from pdstl.operators import Always, And, Eventually, STL_Formula
 
 
 class Environment:
@@ -40,18 +41,17 @@ class Environment:
         Adds a moving rectangular obstacle.
         x_traj, y_traj: Tensors or lists of center positions over time [T+1]
         """
-        self.moving_obstacles.append({
-            "x_traj": x_traj,
-            "y_traj": y_traj,
-            "width": width,
-            "height": height
-        })
+        self.moving_obstacles.append(
+            {"x_traj": x_traj, "y_traj": y_traj, "width": width, "height": height}
+        )
 
     def add_lane_marking(self, x_range, y_pos, style="dashed", color="white"):
         """
         Adds a visual lane marking (line).
         """
-        self.lane_markings.append({"x": x_range, "y": y_pos, "style": style, "color": color})
+        self.lane_markings.append(
+            {"x": x_range, "y": y_pos, "style": style, "color": color}
+        )
 
     def add_visit_region(self, x_range, y_range):
         """
@@ -72,8 +72,7 @@ class Environment:
         self.bounds = {"x": x_range, "y": y_range}
 
     def get_predicates(self):
-        """
-        """
+        """ """
         preds = {"obstacles": [], "visit": [], "goal": None}
 
         if self.goal:
@@ -85,10 +84,16 @@ class Environment:
         if self.obstacles or self.circle_obstacles or self.moving_obstacles:
             obs_preds = [RectangularObstaclePredicate(obs) for obs in self.obstacles]
             obs_preds.extend(
-                [CircularObstaclePredicate(obs, device=self.device) for obs in self.circle_obstacles]
+                [
+                    CircularObstaclePredicate(obs, device=self.device)
+                    for obs in self.circle_obstacles
+                ]
             )
             obs_preds.extend(
-                [MovingRectangularObstaclePredicate(obs, device=self.device) for obs in self.moving_obstacles]
+                [
+                    MovingRectangularObstaclePredicate(obs, device=self.device)
+                    for obs in self.moving_obstacles
+                ]
             )
             preds["obstacles"] = obs_preds
 
@@ -137,7 +142,7 @@ class Environment:
         combined_spec = specs[0]
         for i in range(1, len(specs)):
             combined_spec = And(combined_spec, specs[i])
-            
+
         return combined_spec
 
 
@@ -171,7 +176,7 @@ class RectangularGoalPredicate(STL_Formula):
         # We process the entire trajectory at once
 
         # 1. Extract Means and Variances
-        
+
         means = []
         vars_diag = []
 
@@ -195,23 +200,16 @@ class RectangularGoalPredicate(STL_Formula):
         mu_x, mu_y = mu[..., 0], mu[..., 1]
         var_x, var_y = var[..., 0], var[..., 1]
 
-        # 2. Compute Probabilities for each edge
-        # P(x >= x_min) = 1 - P(x <= x_min) = 1 - CDF(x_min)
-        p_xmin = 1.0 - normal_cdf(self.x_min, mu_x, var_x)
+        # 2. Compute Probabilities for intervals (assuming independence)
+        # P(x_min <= x <= x_max) = CDF(x_max) - CDF(x_min)
+        p_x = normal_cdf(self.x_max, mu_x, var_x) - normal_cdf(self.x_min, mu_x, var_x)
 
-        # P(x <= x_max) = CDF(x_max)
-        p_xmax = normal_cdf(self.x_max, mu_x, var_x)
+        # P(y_min <= y <= y_max) = CDF(y_max) - CDF(y_min)
+        p_y = normal_cdf(self.y_max, mu_y, var_y) - normal_cdf(self.y_min, mu_y, var_y)
 
-        # P(y >= y_min)
-        p_ymin = 1.0 - normal_cdf(self.y_min, mu_y, var_y)
-
-        # P(y <= y_max)
-        p_ymax = normal_cdf(self.y_max, mu_y, var_y)
-
-        # 3. Combine using Min (Intersection)
-        # We stack them to find the element-wise min across the 4 conditions
-        stacked_probs = torch.stack([p_xmin, p_xmax, p_ymin, p_ymax], dim=0)
-        p_goal, _ = torch.min(stacked_probs, dim=0)  # [Batch, Time]
+        # 3. Combine using Product (Independence)
+        # This is more accurate for a rectangular region than min()
+        p_goal = torch.clamp(p_x * p_y, min=0.0, max=1.0)
 
         # 4. Format Output for Operators
         # Since we calculated exact probabilities (surrogates), Lower = Upper
@@ -326,8 +324,12 @@ class MovingRectangularObstaclePredicate(STL_Formula):
     def __init__(self, obs_def, device="cpu"):
         super().__init__()
         # Trajectories are expected to be tensors of shape [T+1]
-        self.x_traj = torch.as_tensor(obs_def["x_traj"], device=device, dtype=torch.float32)
-        self.y_traj = torch.as_tensor(obs_def["y_traj"], device=device, dtype=torch.float32)
+        self.x_traj = torch.as_tensor(
+            obs_def["x_traj"], device=device, dtype=torch.float32
+        )
+        self.y_traj = torch.as_tensor(
+            obs_def["y_traj"], device=device, dtype=torch.float32
+        )
         self.width = obs_def["width"]
         self.height = obs_def["height"]
 
@@ -343,7 +345,7 @@ class MovingRectangularObstaclePredicate(STL_Formula):
             else:
                 vars_diag.append(belief.var_full)
 
-        mu = torch.stack(means, dim=1) # [Batch, Time, Dim]
+        mu = torch.stack(means, dim=1)  # [Batch, Time, Dim]
         var = torch.stack(vars_diag, dim=1)
 
         mu_x, mu_y = mu[..., 0], mu[..., 1]

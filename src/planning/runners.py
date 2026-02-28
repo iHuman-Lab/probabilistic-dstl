@@ -6,10 +6,11 @@ import numpy as np
 import torch
 from matplotlib.transforms import blended_transform_factory
 
+from pdstl.base import BeliefTrajectory
 from planning.animation import animate_results
 from planning.dynamics import DoubleIntegrator, SingleIntegrator
 from planning.environment import Environment
-from planning.planner import ProbabilisticSTLPlanner
+from planning.planner import ProbabilisticSTLPlanner, TorchGaussianBelief
 from planning.visualization import (
     PALETTE,
     plot_covariance_ellipse,
@@ -105,7 +106,7 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
 
     if not force_run and load_from and os.path.exists(load_from):
         print(f"Loading results from {load_from}...")
-        data = torch.load(load_from, map_location=device)
+        data = torch.load(load_from, map_location=device, weights_only=False)
         mean_trace = data["mean_trace"]
         cov_trace = data["cov_trace"]
         u_trace = data["u_trace"]
@@ -207,7 +208,7 @@ def run_mpc(load_from=None, force_run=False):
 
     if not force_run and os.path.exists(load_from):
         print(f"Loading MPC results from {load_from}...")
-        data = torch.load(load_from, map_location=device)
+        data = torch.load(load_from, map_location=device, weights_only=False)
         full_mean_trace = data["mean_trace"]
         full_cov_trace = data["cov_trace"]
         full_u_trace = data["u_trace"]
@@ -1119,6 +1120,285 @@ def run_lane_change_aggressive():
         )
 
 
+def compute_det_stl_robustness(mean_trace, env):
+    """
+    Classical (deterministic) STL robustness of the mean trajectory.
+
+    Evaluates phi = (♦ Goal) ∧ (♦ Visit) ∧ (□ Safe) ∧ (□ InBounds)
+    using standard min/max semantics — no uncertainty, no probability.
+    This is what STLCG computes on the nominal path.
+
+    Returns η (scalar): positive = satisfied, negative = violated.
+    """
+    traj = mean_trace.squeeze().detach().cpu().numpy()  # [T+1, 2]
+    if traj.ndim == 1:
+        traj = traj[np.newaxis, :]
+
+    def _box_signed_dist(pos, x_range, y_range):
+        """Signed distance to a box: positive=outside, negative=inside."""
+        dx = min(pos[0] - x_range[0], x_range[1] - pos[0])
+        dy = min(pos[1] - y_range[0], y_range[1] - pos[1])
+        return min(dx, dy)
+
+    # □ Safe and □ InBounds are evaluated from t=1, not t=0.
+    # The initial state (t=0) is the given starting condition — it is fixed at the
+    # workspace boundary (x=0.0 == bounds x_min) by problem setup, so including it
+    # would make η_bounds = 0 for any plan regardless of quality.  STLCG computes
+    # robustness of the *planned* trajectory; we adopt the same convention here.
+
+    # □ Safe: must stay outside all obstacles at every planned step (t=1..T)
+    if env.obstacles:
+        obs_margins = []
+        for t in range(1, len(traj)):
+            pos = traj[t]
+            step_margins = []
+            for obs in env.obstacles:
+                dx = min(pos[0] - obs["x"][0], obs["x"][1] - pos[0])
+                dy = min(pos[1] - obs["y"][0], obs["y"][1] - pos[1])
+                inside_margin = min(dx, dy)
+                step_margins.append(-inside_margin)  # positive = outside = safe
+            obs_margins.append(min(step_margins))
+        eta_safe = float(np.min(obs_margins))
+    else:
+        eta_safe = float("inf")
+
+    # □ InBounds (t=1..T)
+    if env.bounds:
+        bound_margins = [
+            _box_signed_dist(traj[t], env.bounds["x"], env.bounds["y"])
+            for t in range(1, len(traj))
+        ]
+        eta_bounds = float(np.min(bound_margins))
+    else:
+        eta_bounds = float("inf")
+
+    # ♦ Goal (Eventually)
+    if env.goal:
+        goal_margins = [
+            _box_signed_dist(traj[t], env.goal["x"], env.goal["y"])
+            for t in range(len(traj))
+        ]
+        eta_goal = float(np.max(goal_margins))  # best over time (♦)
+    else:
+        eta_goal = float("inf")
+
+    # ♦ Visit (Eventually)
+    if env.visit_regions:
+        visit_margins = []
+        for reg in env.visit_regions:
+            reg_margins = [
+                _box_signed_dist(traj[t], reg["x"], reg["y"])
+                for t in range(len(traj))
+            ]
+            visit_margins.append(float(np.max(reg_margins)))
+        eta_visit = float(np.min(visit_margins))  # all visit regions must be hit
+    else:
+        eta_visit = float("inf")
+
+    eta = min(eta_safe, eta_bounds, eta_goal, eta_visit)
+    print(
+        f"  η breakdown — safe: {eta_safe:.4f}, bounds: {eta_bounds:.4f}, "
+        f"goal: {eta_goal:.4f}, visit: {eta_visit:.4f}  →  η = {eta:.4f}"
+    )
+    return eta
+
+
+def _evaluate_stl_bounds(mean_trace, cov_trace, env, T, device):
+    """
+    Re-evaluate the probabilistic STL formula on a saved trajectory to obtain
+    [P_lower, P_upper] at t=0 without re-running the optimizer.
+
+    P_lower uses Fréchet lower bound (conservative, provably correct).
+    P_upper uses min-upper bound (optimistic but valid upper bound).
+    Together they bracket the true satisfaction probability.
+    """
+    beliefs = [
+        TorchGaussianBelief(mean_trace[:, t, :], cov_trace[:, t])
+        for t in range(T + 1)
+    ]
+    traj = BeliefTrajectory(beliefs)
+    phi = env.get_specification(T)
+
+    with torch.no_grad():
+        stl_trace = phi(traj)
+
+    p_lower = float(stl_trace[0, 0, 0])
+    p_upper = float(stl_trace[0, 0, 1])
+    return p_lower, p_upper
+
+
+def _run_mc_trials(u_seq, env, x0_mean, T, dt, true_q_std, n_trials, device):
+    """
+    Monte Carlo rollout of a fixed control sequence under true noise.
+
+    Returns dict with keys: success_rate, safety_rate, goal_rate, visit_rate,
+    all as floats in [0, 1].
+    """
+    success, safe_count, goal_count, visit_count = 0, 0, 0, 0
+
+    for _ in range(n_trials):
+        curr_x = x0_mean.clone()
+        trace = [curr_x.cpu().numpy()]
+
+        for t in range(T):
+            u = u_seq[t]
+            noise = torch.randn(2, device=device) * true_q_std
+            curr_x = curr_x + u * dt + noise
+            trace.append(curr_x.cpu().numpy())
+
+        trace_np = np.array(trace)  # [T+1, 2]
+
+        # Per-constraint checks
+        is_safe = True
+        for t in range(len(trace_np)):
+            pos = trace_np[t]
+            for obs in env.obstacles:
+                if (obs["x"][0] <= pos[0] <= obs["x"][1]) and (
+                    obs["y"][0] <= pos[1] <= obs["y"][1]
+                ):
+                    is_safe = False
+                    break
+            if not is_safe:
+                break
+
+        visited = False
+        if not env.visit_regions:
+            visited = True
+        else:
+            for t in range(len(trace_np)):
+                pos = trace_np[t]
+                for reg in env.visit_regions:
+                    if (reg["x"][0] <= pos[0] <= reg["x"][1]) and (
+                        reg["y"][0] <= pos[1] <= reg["y"][1]
+                    ):
+                        visited = True
+                        break
+                if visited:
+                    break
+
+        in_goal = False
+        if env.goal:
+            final_pos = trace_np[-1]
+            in_goal = (
+                env.goal["x"][0] <= final_pos[0] <= env.goal["x"][1]
+                and env.goal["y"][0] <= final_pos[1] <= env.goal["y"][1]
+            )
+        else:
+            in_goal = True
+
+        if is_safe:
+            safe_count += 1
+        if in_goal:
+            goal_count += 1
+        if visited:
+            visit_count += 1
+        if is_safe and in_goal and visited:
+            success += 1
+
+    return {
+        "success_rate": success / n_trials,
+        "safety_rate": safe_count / n_trials,
+        "goal_rate": goal_count / n_trials,
+        "visit_rate": visit_count / n_trials,
+    }
+
+
+def _print_comparison_table(results, n_trials):
+    """Print and return a formatted comparison table."""
+    det = results["deterministic"]
+    prob = results["probabilistic"]
+
+    header = f"{'Metric':<32} {'Deterministic (STLCG)':>22} {'Probabilistic (Ours)':>28}"
+    sep = "-" * len(header)
+
+    def pct(v):
+        return f"{v * 100:.1f}%"
+
+    p_interval = (
+        f"[{prob['planned_metric']:.3f}, {prob['planned_metric_upper']:.3f}]"
+        if "planned_metric_upper" in prob
+        else f"P_lower={prob['planned_metric']:.4f}"
+    )
+
+    rows = [
+        ("Planned metric [planning-time]",
+         f"η = {det['planned_metric']:.4f}",
+         f"[P_lower, P_upper] = {p_interval}"),
+        (f"MC Success Rate  (N={n_trials})",
+         pct(det["success_rate"]), pct(prob["success_rate"])),
+        ("MC Safety Rate",
+         pct(det["safety_rate"]), pct(prob["safety_rate"])),
+        ("MC Goal Rate",
+         pct(det["goal_rate"]), pct(prob["goal_rate"])),
+        ("MC Visit Rate",
+         pct(det["visit_rate"]), pct(prob["visit_rate"])),
+    ]
+
+    print("\n" + "=" * len(header))
+    print("SINGLE-SHOT COMPARISON: Deterministic (STLCG) vs. Probabilistic (Ours)")
+    print("=" * len(header))
+    print(header)
+    print(sep)
+    for name, d_val, p_val in rows:
+        print(f"{name:<32} {d_val:>22} {p_val:>22}")
+    print("=" * len(header) + "\n")
+
+    return rows
+
+
+def _save_latex_table(results, n_trials, filename="single_shot_comparison_table.tex"):
+    """Save results as a LaTeX tabular environment."""
+    det = results["deterministic"]
+    prob = results["probabilistic"]
+
+    def pct(v):
+        return f"{v * 100:.1f}\\%"
+
+    p_upper = prob.get("planned_metric_upper", None)
+    if p_upper is not None:
+        prob_metric_str = (
+            f"$[{prob['planned_metric']:.3f},\\, {p_upper:.3f}]$"
+        )
+    else:
+        prob_metric_str = f"$P_{{\\rm lower}} = {prob['planned_metric']:.3f}$"
+
+    rows = [
+        ("Planned metric ($[P_{\\rm lower}, P_{\\rm upper}]$ / $\\eta$)",
+         f"$\\eta = {det['planned_metric']:.3f}$",
+         prob_metric_str),
+        (f"MC Success Rate ($N={n_trials}$)",
+         pct(det["success_rate"]), pct(prob["success_rate"])),
+        ("MC Safety Rate",
+         pct(det["safety_rate"]), pct(prob["safety_rate"])),
+        ("MC Goal Rate",
+         pct(det["goal_rate"]), pct(prob["goal_rate"])),
+        ("MC Visit Rate",
+         pct(det["visit_rate"]), pct(prob["visit_rate"])),
+    ]
+
+    lines = [
+        "\\begin{table}[h]",
+        "  \\centering",
+        "  \\caption{Single-shot planning comparison over Monte Carlo trials.}",
+        "  \\label{tab:single_shot_comparison}",
+        "  \\begin{tabular}{lcc}",
+        "    \\toprule",
+        "    \\textbf{Metric} & \\textbf{Deterministic (STLCG)} & \\textbf{Probabilistic (Ours)} \\\\",
+        "    \\midrule",
+    ]
+    for name, d_val, p_val in rows:
+        lines.append(f"    {name} & {d_val} & {p_val} \\\\")
+    lines += [
+        "    \\bottomrule",
+        "  \\end{tabular}",
+        "\\end{table}",
+    ]
+
+    with open(filename, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"LaTeX table saved to {filename}")
+
+
 def _check_trace_success(trace, env):
     """
     Returns True if the single trace satisfies all constraints (Goal, Visit, Obstacles).
@@ -1169,353 +1449,132 @@ def _check_trace_success(trace, env):
     return True
 
 
-def run_paper_comparison(load_from=None, force_run=False):
+def run_single_shot_comparison(n_trials=100, force_run=False):
+    """
+    Compares probabilistic STL planning against a deterministic (STLCG-style)
+    baseline on the single-shot scenario over Monte Carlo trials.
+
+    Deterministic baseline: plans with near-zero noise (q_std=0.001), robustness
+    evaluated as classical STL η on the mean trajectory.
+    Probabilistic (ours): plans with true noise model (q_std=0.03), robustness
+    evaluated as P_lower at t=0.
+
+    Both plans are rolled out for `n_trials` MC trials with true noise (q_std=0.03)
+    to measure empirical success rates.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    T = 80
-    T = 100
+    T = 130
     dt = 0.2
-    MC_SAMPLES = 100  # Number of Monte Carlo simulations
+    true_q_std = 0.03
+    x0_mean = torch.tensor([0.0, 5.0], device=device)
+    x0_cov_small = torch.eye(2, device=device) * 1e-4
 
-    # --- Setup Environment (Same as Single Shot) ---
+    # --- Environment (identical to run_single_shot) ---
     env = Environment(device=device)
-    env.set_goal(x_range=[9.0, 11.0], y_range=[2.0, 4.0])
+    env.set_goal(x_range=[10.0, 12.0], y_range=[2.0, 4.0])
     env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 10.5])
-    env.add_visit_region(x_range=[7.0, 9.0], y_range=[7.0, 9.0])
-
-    # Obstacles
+    env.add_visit_region(x_range=[8.0, 10.0], y_range=[7.0, 9.0])
     env.add_obstacle(x_range=[3.0, 6.0], y_range=[0.0, 3.0])
     env.add_obstacle(x_range=[3.0, 6.0], y_range=[4.0, 7.0])
     env.add_obstacle(x_range=[3.0, 6.0], y_range=[7.5, 10.0])
 
-    x0_mean = torch.tensor([0.0, 5.0], device=device)
+    planner_cfg = {
+        "w_u": 0.5,
+        "w_du": 0.01,
+        "w_phi": 100.0,
+        "lr": 0.05,
+        "max_iters": 1000,
+        "alpha": 0.95,
+        "w_dist": 50.0,
+        "w_obs": 3.0,
+        "w_visit": 50.0,
+    }
 
-    if load_from is None:
-        load_from = os.path.join(RESULTS_DIR, "paper_comparison.pt")
-
-    if not force_run and os.path.exists(load_from):
-        print(f"Loading Paper Comparison results from {load_from}...")
-        data = torch.load(load_from, map_location=device)
-        mu_det = data["mu_det"]
-        u_det = data["u_det"]
-        mu_prob = data["mu_prob"]
-        cov_prob = data["cov_prob"]
-        u_prob = data["u_prob"]
+    # ------------------------------------------------------------------ #
+    # Plan A — Probabilistic (Ours)
+    # ------------------------------------------------------------------ #
+    prob_path = os.path.join(RESULTS_DIR, "single_shot.pt")
+    if not force_run and os.path.exists(prob_path):
+        print(f"Loading probabilistic plan from {prob_path}...")
+        data = torch.load(prob_path, map_location=device, weights_only=False)
+        u_prob = data["u_trace"]
+        mean_trace_prob = data["mean_trace"]
+        cov_trace_prob = data["cov_trace"]
     else:
-        print("Running Deterministic Baseline...")
-        dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.0, device=device)
-        # --- 1. Deterministic Baseline (Naive) ---
-        # We use a very small q_std to mimic a deterministic planner that assumes perfect execution.
-        print("\n--- Running Deterministic Baseline (Naive) ---")
-        dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.001, device=device)
-        planner_det = ProbabilisticSTLPlanner(
-            dyn_det,
-            env,
-            T,
-            config={
-                "w_u": 0.1,
-                "w_du": 0.1,
-                "w_phi": 1000.0,
-                "lr": 0.02,
-                "max_iters": 500,
-                "w_dist": 5.0,
-                "w_obs": 1.0,
-                "alpha": 0.99,
-                "w_u": 0.5,
-                "w_du": 0.01,
-                "w_phi": 100.0,
-                "lr": 0.05,
-                "max_iters": 1000,
-                "w_dist": 50.0,
-                "w_obs": 3.0,
-                "w_visit": 50.0,
-                "alpha": 0.99,
-            },
-        )
-        x0_cov_det = torch.eye(2, device=device) * 1e-6
-        mu_det, _, u_det, _, _ = planner_det.solve(
-            x0_mean, x0_cov_det, render=False, verbose=True
-        )
-        x0_cov_det = torch.eye(2, device=device) * 0.0001
-        mu_det, _, u_det, _, _ = planner_det.solve(
-            x0_mean, x0_cov_det, render=False, verbose=True, init_guess=None
-        )
-
-        print("Running Probabilistic Framework...")
-        dyn_prob = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.08, device=device)
-        # --- 2. Probabilistic Planner (Ours) ---
-        # We use the TRUE noise (q_std=0.05) in the planning model.
-        print("\n--- Running Probabilistic Planner (Ours) ---")
-        dyn_prob = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.05, device=device)
-        planner_prob = ProbabilisticSTLPlanner(
-            dyn_prob,
-            env,
-            T,
-            config={
-                "w_u": 0.1,
-                "w_du": 0.1,
-                "w_phi": 1000.0,
-                "lr": 0.02,
-                "max_iters": 500,
-                "w_dist": 5.0,
-                "w_obs": 1.0,
-                "alpha": 0.95,
-                "w_u": 0.5,
-                "w_du": 0.01,
-                "w_phi": 100.0,
-                "lr": 0.05,
-                "max_iters": 1000,
-                "w_dist": 50.0,
-                "w_obs": 3.0,
-                "w_visit": 50.0,
-                "alpha": 0.95,
-            },
-        )
+        print("Running probabilistic planner (q_std=0.03)...")
+        dyn_prob = SingleIntegrator(dt=dt, u_max=1.0, q_std=true_q_std, device=device)
+        planner_prob = ProbabilisticSTLPlanner(dyn_prob, env, T, config=planner_cfg)
         x0_cov_prob = torch.eye(2, device=device) * 0.01
-        mu_prob, cov_prob, u_prob, _, _ = planner_prob.solve(
+        mean_trace_prob, cov_trace_prob, u_prob, _, _ = planner_prob.solve(
             x0_mean, x0_cov_prob, render=False, verbose=True
         )
-        mu_prob, cov_prob, u_prob, _, _ = planner_prob.solve(
-            x0_mean, x0_cov_prob, render=False, verbose=True, init_guess=None
-        )
 
-        torch.save(
-            {
-                "mu_det": mu_det,
-                "u_det": u_det,
-                "mu_prob": mu_prob,
-                "cov_prob": cov_prob,
-                "u_prob": u_prob,
-            },
-            load_from,
-        )
-        print(f"Results saved to {load_from}")
-
-    # --- 3. Monte Carlo Simulation ---
-    print(f"\n--- Running Monte Carlo Validation (N={MC_SAMPLES}) ---")
-    # True Dynamics
-    true_q_std = 0.05
-
-    def run_mc(u_seq, name):
-        success_count = 0
-        traces = []
-        for i in range(MC_SAMPLES):
-            # Rollout with noise
-            # We can use the dynamics forward pass but we need to inject noise manually if forward doesn't do it per step
-            # Actually SingleIntegrator.forward computes the distribution. We need sample paths.
-            # Let's do a manual loop.
-            curr_x = x0_mean.clone()
-            trace = [curr_x.cpu().numpy()]
-
-            for t in range(T):
-                u = u_seq[t]
-                # Step with noise
-                # x_next = x + u*dt + noise
-                noise = torch.randn(2, device=device) * true_q_std
-                curr_x = curr_x + u * dt + noise
-                trace.append(curr_x.cpu().numpy())
-
-            trace_np = np.array(trace)
-            traces.append(trace_np)
-            if _check_trace_success(trace_np, env):
-                success_count += 1
-
-        print(
-            f"{name} Success Rate: {success_count}/{MC_SAMPLES} ({success_count / MC_SAMPLES * 100:.1f}%)"
-        )
-        return traces, success_count
-
-    det_traces, det_success = run_mc(u_det, "Deterministic Plan")
-    prob_traces, prob_success = run_mc(u_prob, "Probabilistic Plan")
-
-    mu_d = mu_det.detach().cpu().squeeze().numpy()
-    mu_p = mu_prob.detach().cpu().squeeze().numpy()
-    cov_p = cov_prob.detach().cpu().squeeze().numpy()
-    u_d = u_det.detach().cpu().squeeze().numpy()
-    u_p = u_prob.detach().cpu().squeeze().numpy()
-
-    # --- Trajectory Comparison ---
-    fig1, axes = plt.subplots(1, 2, figsize=(18, 9), sharey=True)
-
-    # Common plotting helper
-    def plot_env_and_traces(ax, traces, nominal, title, color_nominal, x0):
-        ax.set_xlim(-1, 13)
-        ax.set_ylim(-1, 11)
-        ax.set_aspect("equal")
-        ax.set_title(title, fontsize=20, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis="both", which="major", labelsize=14)
-
-        # Env
-        for obs in env.obstacles:
-            ax.add_patch(
-                patches.Rectangle(
-                    (obs["x"][0], obs["y"][0]),
-                    obs["x"][1] - obs["x"][0],
-                    obs["y"][1] - obs["y"][0],
-                    facecolor=PALETTE["obs_static"]["fill"],
-                    edgecolor=PALETTE["obs_static"]["stroke"],
-                    alpha=0.6,
-                    hatch="//",
-                )
-            )
-        if env.goal:
-            gx, gy = env.goal["x"], env.goal["y"]
-            ax.add_patch(
-                patches.Rectangle(
-                    (gx[0], gy[0]),
-                    gx[1] - gx[0],
-                    gy[1] - gy[0],
-                    facecolor=PALETTE["goal"]["fill"],
-                    edgecolor=PALETTE["goal"]["stroke"],
-                    alpha=0.4,
-                )
-            )
-            ax.text(
-                (gx[0] + gx[1]) / 2,
-                (gy[0] + gy[1]) / 2,
-                "G",
-                fontsize=24,
-                fontweight="bold",
-                ha="center",
-                va="center",
-                color=PALETTE["goal"]["stroke"],
-                zorder=30,
-            )
-        for region in env.visit_regions:
-            vx, vy = region["x"], region["y"]
-            ax.add_patch(
-                patches.Rectangle(
-                    (vx[0], vy[0]),
-                    vx[1] - vx[0],
-                    vy[1] - vy[0],
-                    facecolor=PALETTE["visit"]["fill"],
-                    edgecolor=PALETTE["visit"]["stroke"],
-                    alpha=0.4,
-                )
-            )
-            ax.text(
-                (vx[0] + vx[1]) / 2,
-                (vy[0] + vy[1]) / 2,
-                "V",
-                fontsize=24,
-                fontweight="bold",
-                ha="center",
-                va="center",
-                color=PALETTE["visit"]["stroke"],
-                zorder=30,
-            )
-
-        # Add 'S' for start
-        start_pos = x0.cpu().numpy()
-        ax.text(
-            start_pos[0] - 0.5,
-            start_pos[1],
-            "S",
-            fontsize=24,
-            fontweight="bold",
-            ha="center",
-            va="center",
-            color="black",
-            zorder=30,
-        )
-
-        # MC Traces
-        for tr in traces:
-            # Check if this specific trace failed?
-            # For visual clarity, just plot them all faintly
-            ax.plot(tr[:, 0], tr[:, 1], color="gray", alpha=0.15, linewidth=0.8)
-
-        # Nominal
-        ax.plot(
-            nominal[:, 0],
-            nominal[:, 1],
-            color=color_nominal,
-            linewidth=3.5,
-            label="Planned Path",
-        )
-
-    # Plot Deterministic
-    plot_env_and_traces(
-        axes[0],
-        det_traces,
-        mu_d,
-        f"Deterministic Baseline\nSuccess: {det_success}%",
-        PALETTE["lane"]["stroke"],
-        x0_mean,
+    # Re-evaluate the STL formula to get [P_lower, P_upper] at t=0.
+    # P_lower uses Fréchet bounds (conservative, provably correct).
+    # P_upper uses min-upper bound (optimistic but still a valid upper bound).
+    print("\nEvaluating probabilistic STL bounds on saved trajectory...")
+    p_lower_prob, p_upper_prob = _evaluate_stl_bounds(
+        mean_trace_prob, cov_trace_prob, env, T, device
     )
-    axes[0].set_xlabel("$x$ [m]", fontsize=18, fontweight="bold")
-    axes[0].set_ylabel("$y$ [m]", fontsize=18, fontweight="bold")
+    print(f"  P_lower = {p_lower_prob:.4f}  |  P_upper = {p_upper_prob:.4f}")
 
-    # Plot Probabilistic
-    plot_env_and_traces(
-        axes[1],
-        prob_traces,
-        mu_p,
-        f"Probabilistic (Ours)\nSuccess: {prob_success}%",
-        PALETTE["ego"]["stroke"],
-        x0_mean,
-    )
-    axes[1].set_xlabel("$x$ [m]", fontsize=18, fontweight="bold")
-    # Add uncertainty ellipses to probabilistic plot
-    for t in range(0, T + 1, 5):
-        plot_covariance_ellipse(
-            axes[1],
-            mu_p[t],
-            cov_p[t],
-            facecolor=PALETTE["ego"]["fill"],
-            edgecolor=PALETTE["ego"]["stroke"],
-            alpha=0.35,
+    # ------------------------------------------------------------------ #
+    # Plan B — Deterministic / STLCG-style (mean path, q_std ≈ 0)
+    # ------------------------------------------------------------------ #
+    det_path = os.path.join(RESULTS_DIR, "single_shot_det.pt")
+    if not force_run and os.path.exists(det_path):
+        print(f"Loading deterministic plan from {det_path}...")
+        data_det = torch.load(det_path, map_location=device, weights_only=False)
+        u_det = data_det["u_trace"]
+        mu_det = data_det["mean_trace"]
+    else:
+        print("Running deterministic planner (q_std=0.001)...")
+        dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.001, device=device)
+        planner_det = ProbabilisticSTLPlanner(dyn_det, env, T, config=planner_cfg)
+        mu_det, _, u_det, _, _ = planner_det.solve(
+            x0_mean, x0_cov_small, render=False, verbose=True
         )
+        torch.save({"mean_trace": mu_det, "u_trace": u_det}, det_path)
+        print(f"Deterministic plan saved to {det_path}")
 
-    plt.tight_layout()
-    plt.savefig("paper_comparison_mc.pdf", bbox_inches="tight")
-    plt.close(fig1)
-    print("Saved comparison plot to paper_comparison_mc.pdf")
+    # Classical STL robustness η on the deterministic mean trajectory
+    eta_det = compute_det_stl_robustness(mu_det, env)
+    print(f"\nDeterministic STL robustness η = {eta_det:.4f}")
 
-    # --- Control Input Comparison ---
-    t_sec = np.arange(T) * dt
-    fig2, axes = plt.subplots(2, 1, figsize=(10, 5), sharex=True)
-    axes[0].plot(
-        t_sec,
-        u_d[:, 0],
-        color=PALETTE["lane"]["stroke"],
-        linestyle="--",
-        linewidth=1.8,
-        label="Deterministic",
+    # ------------------------------------------------------------------ #
+    # Monte Carlo Evaluation
+    # ------------------------------------------------------------------ #
+    print(f"\nRunning {n_trials} MC trials per method (true q_std={true_q_std})...")
+
+    print("  Evaluating deterministic plan...")
+    det_results = _run_mc_trials(
+        u_det.squeeze(0), env, x0_mean, T, dt, true_q_std, n_trials, device
     )
-    axes[0].plot(
-        t_sec,
-        u_p[:, 0],
-        color=PALETTE["ego"]["stroke"],
-        linewidth=1.8,
-        label="Probabilistic (Ours)",
+
+    print("  Evaluating probabilistic plan...")
+    prob_results = _run_mc_trials(
+        u_prob.squeeze(0), env, x0_mean, T, dt, true_q_std, n_trials, device
     )
-    axes[0].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[0].set_ylabel("$u_x$ [m/s]", fontsize=13)
-    axes[0].tick_params(labelsize=11)
-    axes[0].grid(True, alpha=0.35)
-    axes[1].plot(
-        t_sec, u_d[:, 1], color=PALETTE["lane"]["stroke"], linestyle="--", linewidth=1.8
+
+    # ------------------------------------------------------------------ #
+    # Assemble and display results
+    # ------------------------------------------------------------------ #
+    results = {
+        "deterministic": {"planned_metric": eta_det, **det_results},
+        "probabilistic": {
+            "planned_metric": p_lower_prob,
+            "planned_metric_upper": p_upper_prob,
+            **prob_results,
+        },
+    }
+
+    _print_comparison_table(results, n_trials)
+    _save_latex_table(results, n_trials)
+
+    torch.save(
+        {"results": results, "n_trials": n_trials, "true_q_std": true_q_std},
+        os.path.join(RESULTS_DIR, "single_shot_comparison.pt"),
     )
-    axes[1].plot(t_sec, u_p[:, 1], color=PALETTE["ego"]["stroke"], linewidth=1.8)
-    axes[1].axhline(0, color="k", linewidth=0.5, linestyle=":")
-    axes[1].set_ylabel("$u_y$ [m/s]", fontsize=13)
-    axes[1].set_xlabel("Time [s]", fontsize=13)
-    axes[1].tick_params(labelsize=11)
-    axes[1].grid(True, alpha=0.35)
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig2.legend(
-        handles,
-        labels,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.0),
-        ncol=2,
-        fontsize=11,
-        framealpha=0.95,
-        edgecolor="#cccccc",
-    )
-    fig2.subplots_adjust(bottom=0.18, hspace=0.08)
-    plt.savefig("paper_comparison_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
-    plt.close(fig2)
+    print(f"Raw results saved to {os.path.join(RESULTS_DIR, 'single_shot_comparison.pt')}")

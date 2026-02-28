@@ -15,6 +15,7 @@ from planning.runners import (
     run_lane_change_aggressive,
     run_mpc,
     run_single_shot,
+    run_single_shot_comparison,
 )
 from planning.visualization import PALETTE
 from utils import skip_run
@@ -147,8 +148,8 @@ with skip_run("skip", "Example 2: Piecewise") as check, check():
 # EXAMPLE 3: Single Shot Motion Planning
 # =============================================================================
 
-with skip_run("skip", "Example 3: Single Shot Motion Planning") as check, check():
-    run_single_shot(max_iterations=1000, force_run=False)
+with skip_run("run", "Example 3: Single Shot Motion Planning") as check, check():
+    run_single_shot(max_iterations=1000, force_run=True)
 
 
 # =============================================================================
@@ -160,11 +161,17 @@ with skip_run("skip", "Example 4: MPC Receding Horizon") as check, check():
 # =============================================================================
 # EXAMPLE 5: Lane Change with Moving Obstacle
 # =============================================================================
-with skip_run("run", "Example 5: Lane Change") as check, check():
+with skip_run("skip", "Example 5: Lane Change") as check, check():
     run_lane_change()
 
 # =============================================================================
 # EXAMPLE 6: Aggressive Lane Change
 # =============================================================================
-with skip_run("run", "Example 6: Aggressive Lane Change") as check, check():
+with skip_run("skip", "Example 6: Aggressive Lane Change") as check, check():
     run_lane_change_aggressive()
+
+# =============================================================================
+# EXAMPLE 7: Single Shot Comparison Table (Probabilistic vs. STLCG)
+# =============================================================================
+with skip_run("run", "Example 7: Single Shot Comparison Table") as check, check():
+    run_single_shot_comparison(n_trials=100, force_run=True)

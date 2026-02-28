@@ -214,7 +214,10 @@ class And(STL_Formula):
         l1, u1 = trace1[..., 0:1], trace1[..., 1:2]
         l2, u2 = trace2[..., 0:1], trace2[..., 1:2]
 
-        lower = torch.maximum(l1 + l2 - 1.0, torch.zeros_like(l1))
+        # Product lower bound: P(A ∩ B) ≥ P(A)·P(B) under independence.
+        # Valid when sub-formulas constrain independent spatial regions (goal vs obstacles).
+        # Tighter than Fréchet (max(l1+l2-1,0)) and gives better gradients for optimisation.
+        lower = l1 * l2
         upper = torch.minimum(u1, u2)
 
         return torch.cat([lower, upper], dim=-1)

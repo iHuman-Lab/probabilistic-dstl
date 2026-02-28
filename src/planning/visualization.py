@@ -275,9 +275,9 @@ def visualize_results(
         leg = ax.legend(
             by_label.values(),
             by_label.keys(),
-            loc="upper right",
+            loc="upper left",
             ncol=1,
-            fontsize=18,
+            fontsize=17,
             framealpha=0.95,
             edgecolor="#cccccc",
         )
