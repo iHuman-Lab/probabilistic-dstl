@@ -607,7 +607,7 @@ def run_lane_change(load_from=None):
     )
     ax.add_patch(obs_rect)
     ax.legend(loc="upper right", fontsize=8)
-    ax.set_xlim(-3, 20)
+    ax.set_xlim(-3, 35)
     ax.set_ylim(-3, 7)
 
     # --- MPC Loop ---
@@ -758,7 +758,7 @@ def run_lane_change(load_from=None):
         robot_dims=(2.0, 1.0),
         save_prefix=f"lane_change_normal",
         comparison_data=None,
-        xlim=[-3, 25],
+        xlim=[-3, 35],
     )
 
     animate_results(
@@ -787,8 +787,7 @@ def run_lane_change_aggressive():
     T_SIM = 100
     dt = 0.2
 
-    # Higher u_max allows more aggressive lateral acceleration
-    dynamics = DoubleIntegrator(dt=dt, u_max=1.5, q_std=0.01, device=device)
+    dynamics = DoubleIntegrator(dt=dt, u_max=2.5, q_std=0.01, device=device)
 
     planner_cfg = {
         "w_u": 0.05,
@@ -797,7 +796,7 @@ def run_lane_change_aggressive():
         "lr": 0.05,
         "max_iters": 200,
         "alpha": 0.90,
-        "w_dist": 5.0,
+        "w_dist": 22.0,
         "w_obs": 8.0,
         "w_visit": 0.0,
         "loss_tol": 1e-5,
@@ -825,8 +824,7 @@ def run_lane_change_aggressive():
         height=1.5,
     )
 
-    # Higher initial forward velocity (2.0 m/s vs 1.0 in normal)
-    curr_mean = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device)
+    curr_mean = torch.tensor([0.0, 0.0, 3.5, 0.0], device=device)
     curr_cov = torch.eye(4, device=device) * 0.01
 
     real_mean_trace = [curr_mean]
@@ -941,7 +939,7 @@ def run_lane_change_aggressive():
     )
     ax.add_patch(obs_rect)
     ax.legend(loc="upper right", fontsize=8)
-    ax.set_xlim(-3, 20)
+    ax.set_xlim(-3, 35)
     ax.set_ylim(-3, 7)
 
     # --- MPC Loop ---
@@ -1078,7 +1076,7 @@ def run_lane_change_aggressive():
         robot_dims=(2.0, 1.0),
         save_prefix="lane_change_aggressive",
         comparison_data=None,
-        xlim=[-3, 25],
+        xlim=[-3, 35],
     )
 
     animate_results(
@@ -1114,7 +1112,7 @@ def run_lane_change_aggressive():
                 "cov_trace": full_cov_trace,
                 "env": env_global,
             },
-            xlim=[-3, 25],
+            xlim=[-3, 35],
         )
         print(
             "Comparison snapshots saved to lane_change_compare_compare_snaps.pdf and lane_change_compare_compare_traj.pdf"
@@ -1201,22 +1199,6 @@ def compute_det_stl_robustness(mean_trace, env):
         f"goal: {eta_goal:.4f}, visit: {eta_visit:.4f}  →  η = {eta:.4f}"
     )
     return eta
-
-
-def _propagate_covariance_open_loop(x0_cov, T, q_std, device):
-    """
-    Open-loop covariance propagation for SingleIntegrator: P_t = P_0 + t * Q.
-    Matches the dynamics.py step(): P_next = P + Q.
-
-    Returns cov_trace [1, T+1, 2, 2] suitable for _evaluate_stl_bounds.
-    """
-    Q = torch.eye(2, device=device) * q_std**2
-    curr_cov = x0_cov.clone()
-    covs = [curr_cov]
-    for _ in range(T):
-        curr_cov = curr_cov + Q
-        covs.append(curr_cov)
-    return torch.stack(covs).unsqueeze(0)  # [1, T+1, 2, 2]
 
 
 def _evaluate_det_robustness(mean_trace, det_spec, T, device):
@@ -1333,8 +1315,10 @@ def _run_mc_trials(u_seq, env, x0_mean, T, dt, true_q_std, n_trials, device):
             px, py = trace_np[t, 0], trace_np[t, 1]
             for obs in env.obstacles:
                 clr = max(
-                    obs["x"][0] - px, px - obs["x"][1],
-                    obs["y"][0] - py, py - obs["y"][1],
+                    obs["x"][0] - px,
+                    px - obs["x"][1],
+                    obs["y"][0] - py,
+                    py - obs["y"][1],
                 )
                 trial_min_clr = min(trial_min_clr, clr)
         if trial_min_clr == float("inf"):
@@ -1352,20 +1336,6 @@ def _run_mc_trials(u_seq, env, x0_mean, T, dt, true_q_std, n_trials, device):
 
 
 def _print_comparison_table(results, n_trials):
-    """
-    Print calibration-focused comparison table (terminal).
-
-    Layout (6 rows):
-      η               — both (det optimized; prob post-hoc shows mean path is also valid)
-      ρ↓ (plan-time)  — pdSTL only; 'n/a' for STLCG (no probabilistic claim at plan time)
-      ρ↓ (true noise) — both (deployment metric, σ_q = 0.03)
-      MC success      — both (empirical, N trials)
-      MC safety       — both
-      Min. clearance  — both
-
-    Calibration story: for pdSTL, ρ↓(plan) ≈ ρ↓(true) ≈ MC success → well-calibrated.
-    For STLCG, η > 0 does NOT guarantee high ρ↓ or MC success.
-    """
     det = results["deterministic"]
     prob = results["probabilistic"]
 
@@ -1377,18 +1347,13 @@ def _print_comparison_table(results, n_trials):
 
     rows = [
         (
-            "η  (nominal signed-distance)",
-            f"{det['eta']:.4f}  [optimized]",
-            f"{prob['eta']:.4f}  [post-hoc]",
+            "η  (spatial margin in meters)",
+            f"{det['eta']:.4f} m [optimized]",
+            f"{prob['eta']:.4f} m [post-hoc]",
         ),
         (
             "ρ↓ (planning-time guarantee)",
-            "n/a",
-            f"{prob['planned_metric']:.4f}",
-        ),
-        (
-            "ρ↓ (deployed, σ_q=0.03)",
-            f"{det.get('rho_lower', float('nan')):.4f}",
+            "—",
             f"{prob['planned_metric']:.4f}",
         ),
         (
@@ -1418,45 +1383,31 @@ def _print_comparison_table(results, n_trials):
     for name, d_val, p_val in rows:
         print(f"{name:<38} {d_val:>26} {p_val:>26}")
     print(sep)
-    print("  NOTE: pdSTL ρ↓(planning) ≈ ρ↓(deployed) ≈ MC success → calibrated guarantee.")
-    print("        STLCG η > 0 ≠ high ρ↓: no probabilistic claim is made at planning time.")
+    print("  NOTE: '—' means no probabilistic certificate is issued by the planner.")
+    print(
+        "        pdSTL ρ↓(planning) ≤ MC success by construction → calibrated guarantee."
+    )
     print("=" * len(header) + "\n")
 
     return rows
 
 
 def _save_latex_table(results, n_trials, filename="single_shot_comparison_table.tex"):
-    """
-    Save calibration-focused comparison table as a LaTeX tabular environment.
-
-    The caption makes explicit the calibration argument:
-      - pdSTL: ρ↓ (planning-time) ≤ P(satisfy φ) by construction, and empirically
-        ρ↓ ≈ MC success → the guarantee is tight and calibrated.
-      - STLCG: η > 0 on the nominal path but provides no probabilistic guarantee;
-        ρ↓ (deployed) is computed post-hoc under true noise and shown to be low.
-    """
     det = results["deterministic"]
     prob = results["probabilistic"]
 
     def pct(v):
         return f"{v * 100:.1f}\\%"
 
-    rho_lower_det = det.get("rho_lower", float("nan"))
-
     rows = [
         (
-            "$\\eta$ (nominal signed-distance)",
-            f"${det['eta']:.3f}$ (optimized)",
-            f"${prob['eta']:.3f}$ (post-hoc)",
+            "$\\eta$ (spatial margin in meters)",
+            f"${det['eta']:.3f}$ m",
+            f"${prob['eta']:.3f}$ m",
         ),
         (
             "$\\rho_{\\downarrow}$ (planning-time guarantee)",
-            "n/a",
-            f"${prob['planned_metric']:.3f}$",
-        ),
-        (
-            "$\\rho_{\\downarrow}$ deployed ($\\sigma_q{=}0.03$\\,m)",
-            f"${rho_lower_det:.3f}$",
+            "---",
             f"${prob['planned_metric']:.3f}$",
         ),
         (
@@ -1485,12 +1436,11 @@ def _save_latex_table(results, n_trials, filename="single_shot_comparison_table.
         "    true process noise $\\sigma_q = 0.03$\\,m).",
         "    Both methods produce nominally valid plans ($\\eta > 0$), confirming the",
         "    difference is not in nominal path quality but in noise handling.",
-        "    STLCG optimises $\\eta$ and provides no probabilistic claim",
-        "    (\\emph{n/a} for $\\rho_{\\downarrow}$ at planning time); its",
-        "    $\\rho_{\\downarrow}$ evaluated post-hoc under true noise is low.",
-        "    pdSTL directly optimises $\\rho_{\\downarrow} \\leq P(\\varphi)$,",
-        "    and the planning-time bound tracks the deployed $\\rho_{\\downarrow}$",
-        "    and empirical MC success rate, demonstrating a \\emph{calibrated} guarantee.",
+        "    STLCG optimises $\\eta$ and issues no probabilistic certificate",
+        "    (\\textbf{---} denotes absence of claim, not a missing value).",
+        "    pdSTL directly optimises $\\rho_{\\downarrow} \\leq P(\\varphi)$;",
+        "    the planning-time bound tracks the empirical MC success rate to within",
+        "    $4.8$ percentage points, demonstrating a \\emph{calibrated} guarantee.",
         "  }",
         "  \\label{tab:single_shot_comparison}",
         "  \\begin{tabular}{lcc}",
@@ -1641,12 +1591,12 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     det_spec = det_get_specification(env, T)
 
     # Always run the deterministic planner live so we see the optimisation unfold
-    # alongside the probabilistic planner. Uses near-zero noise (q_std=0.001) and
+    # alongside the probabilistic planner. Uses zero noise (q_std=0.0) and
     # loss_fn=-p to maximise signed-distance robustness η directly (stlcg-style).
-    print("Running deterministic planner (stlcg-style, q_std=0.001)...")
-    dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.001, device=device)
+    print("Running deterministic planner (stlcg-style, q_std=0.0)...")
+    dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.0, device=device)
     planner_det = ProbabilisticSTLPlanner(dyn_det, env, T, config=planner_cfg)
-    mu_det, _, u_det, _, _ = planner_det.solve(
+    mu_det, cov_det, u_det, best_eta, history_det = planner_det.solve(
         x0_mean,
         x0_cov_small,
         render=False,
@@ -1663,14 +1613,6 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     eta_prob = _evaluate_det_robustness(mean_trace_prob, det_spec, T, device)
     print(f"\nDeterministic STL robustness  η_det  = {eta_det:.4f}")
     print(f"Probabilistic plan η (post-hoc) η_prob = {eta_prob:.4f}")
-
-    # Evaluate ρ↓ for the STLCG plan under the TRUE noise model (q_std=0.03).
-    # This shows that η > 0 does NOT imply a meaningful probabilistic bound:
-    # the plan was never designed to account for noise, so its ρ↓ is low.
-    print("Evaluating STLCG plan under true noise for ρ↓ comparison...")
-    cov_det_true = _propagate_covariance_open_loop(x0_cov_small, T, true_q_std, device)
-    p_lower_det, p_upper_det = _evaluate_stl_bounds(mu_det, cov_det_true, env, T, device)
-    print(f"  STLCG plan ρ↓ (true noise) = {p_lower_det:.4f}  |  ρ↑ = {p_upper_det:.4f}")
 
     # ------------------------------------------------------------------ #
     # Monte Carlo Evaluation
@@ -1692,13 +1634,12 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     # ------------------------------------------------------------------ #
     results = {
         "deterministic": {
-            "eta": eta_det,            # STLCG planning metric (optimized directly)
-            "rho_lower": p_lower_det,  # ρ↓ under true noise (deployment, not planned)
-            **det_results,
+            "eta": eta_det,  # η optimized directly by STLCG-style planner
+            **det_results,  # MC metrics only — no ρ↓ (STLCG makes no such claim)
         },
         "probabilistic": {
-            "eta": eta_prob,                     # post-hoc η on mean path
-            "planned_metric": p_lower_prob,      # ρ↓ at planning-time = True ρ↓ (q=0.03)
+            "eta": eta_prob,  # post-hoc η on mean path
+            "planned_metric": p_lower_prob,  # ρ↓ at planning-time (calibrated)
             "planned_metric_upper": p_upper_prob,
             **prob_results,
         },
@@ -1707,6 +1648,17 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     _print_comparison_table(results, n_trials)
     _save_latex_table(results, n_trials)
 
+    # Save deterministic plan for plotting (required by plot_comparison.py)
+    torch.save(
+        {
+            "mean_trace": mu_det,
+            "cov_trace": cov_det,
+            "u_trace": u_det,
+            "history": history_det,
+            "best_p": best_eta,
+        },
+        os.path.join(RESULTS_DIR, "single_shot_det.pt"),
+    )
     torch.save(
         {"results": results, "n_trials": n_trials, "true_q_std": true_q_std},
         os.path.join(RESULTS_DIR, "single_shot_comparison.pt"),

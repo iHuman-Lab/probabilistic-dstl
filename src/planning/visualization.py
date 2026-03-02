@@ -644,6 +644,9 @@ def _plot_lc_trajectory(
 
     if xlim:
         ax.set_xlim(xlim)
+        # Expand masking bounds to include the full visible area requested
+        x_lo = min(x_lo, xlim[0])
+        x_hi = max(x_hi, xlim[1])
     else:
         ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(y_lo, y_hi)
@@ -828,6 +831,9 @@ def _plot_lc_snapshots(
 
     if xlim:
         ax.set_xlim(xlim)
+        # Expand masking bounds to include the full visible area requested
+        x_lo = min(x_lo, xlim[0])
+        x_hi = max(x_hi, xlim[1])
     else:
         ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(y_lo, y_hi)
