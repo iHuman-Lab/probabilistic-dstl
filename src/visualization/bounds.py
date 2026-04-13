@@ -1,19 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-
-
-# Tableau 20 colors
-PALETTE = {
-    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
-    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
-    "visit":      {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
-    "obs_static": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Red (Light/Dark)
-    "obs_moving": {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Purple (Light/Dark)
-    "lane":       {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
-    "goal":       {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
-    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
-}
+from planning.visualization import PALETTE
 
 
 def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):

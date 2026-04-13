@@ -20,28 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-
-# =============================================================================
-# SMOOTH MAX / MIN (direct port from stlcg)
-# =============================================================================
-
-
-class Maxish(nn.Module):
-    """Smooth maximum. scale <= 0: exact max. scale > 0: logsumexp approximation."""
-
-    def forward(self, x, scale, dim=1, keepdim=True):
-        if scale > 0:
-            return torch.logsumexp(x * scale, dim=dim, keepdim=keepdim) / scale
-        return x.max(dim, keepdim=keepdim)[0]
-
-
-class Minish(nn.Module):
-    """Smooth minimum. scale <= 0: exact min. scale > 0: neg-logsumexp approximation."""
-
-    def forward(self, x, scale, dim=1, keepdim=True):
-        if scale > 0:
-            return -torch.logsumexp(-x * scale, dim=dim, keepdim=keepdim) / scale
-        return x.min(dim, keepdim=keepdim)[0]
+from pdstl.operators import Maxish, Minish
 
 
 # =============================================================================

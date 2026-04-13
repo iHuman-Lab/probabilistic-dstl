@@ -3,18 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 from matplotlib.animation import FuncAnimation
-
-# Tableau 20 colors
-PALETTE = {
-    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
-    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
-    "visit":      {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Green (Light/Dark)
-    "obs_static": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Red (Light/Dark)
-    "obs_moving": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Purple (Light/Dark)
-    "lane":       {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
-    "goal":       {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
-    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
-}
+from planning.visualization import PALETTE, cov_ellipse_params
 
 
 
@@ -217,15 +206,7 @@ def animate_results(
         trail.set_data(mean_np[: frame + 1, 0], mean_np[: frame + 1, 1])
 
         # Update Covariance Ellipse
-        cov = cov_np[frame, :2, :2]
-        vals, vecs = np.linalg.eigh(cov)
-        order = vals.argsort()[::-1]
-        vals = vals[order]
-        vecs = vecs[:, order]
-
-        # Calculate angle and size
-        theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
-        width, height = 2 * 2.45 * np.sqrt(vals)
+        theta, width, height = cov_ellipse_params(cov_np[frame, :2, :2])
 
         ellipse.set_center((x, y))
         ellipse.set_width(width)

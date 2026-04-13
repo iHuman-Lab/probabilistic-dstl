@@ -1,0 +1,18 @@
+# Visualization settings shared across all plotting functions.
+
+confidence_k: 1.96    # Multiplier for covariance ellipse axes (1.96 ≈ 95% CI)
+
+figure_sizes:
+  trajectory: [10, 6]
+  controls: [10, 3]
+  metrics: [10, 3]
+  lane_change: [14, 4]
+  comparison: [12, 5]
+
+font_sizes:
+  title: 16
+  axis_label: 14
+  tick_label: 12
+  legend: 10
+
+ellipse_plot_interval: 2   # Draw a covariance ellipse every N steps

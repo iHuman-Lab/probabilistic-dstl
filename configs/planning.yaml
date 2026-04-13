@@ -1,0 +1,13 @@
+# Default gradient-descent planner hyperparameters.
+# Individual scenarios can override any of these values.
+
+w_u: 0.1          # Weight on control effort (penalises large inputs)
+w_du: 0.1         # Weight on smoothness (penalises input rate of change)
+w_phi: 10.0       # Weight on STL satisfaction objective
+lr: 0.05          # Adam learning rate
+max_iters: 500    # Maximum optimisation iterations
+alpha: 0.95       # Satisfaction probability threshold for early stopping
+w_dist: 5.0       # Goal guidance heuristic weight
+w_obs: 5.0        # Obstacle repulsion heuristic weight
+w_visit: 5.0      # Visit-region heuristic weight
+loss_tol: 1.0e-4  # Loss convergence tolerance

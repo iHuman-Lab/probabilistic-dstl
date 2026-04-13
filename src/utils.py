@@ -1,5 +1,25 @@
+import os
 import sys
 from contextlib import contextmanager
+
+import yaml
+
+
+def load_config(path):
+    """Load a YAML config file and return it as a dict.
+
+    Parameters
+    ----------
+    path : str
+        Path to the YAML file. Can be relative to the project root
+        (e.g. ``"configs/scenarios/single_shot.yaml"``).
+    """
+    if not os.path.isabs(path):
+        # Resolve relative paths from the project root (two levels above this file)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, path)
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
 
 
 class SkipWith(Exception):

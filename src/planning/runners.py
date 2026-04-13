@@ -1,4 +1,7 @@
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
@@ -7,6 +10,7 @@ import torch
 from matplotlib.transforms import blended_transform_factory
 
 from baselines.det_stl import det_get_specification
+from utils import load_config
 from pdstl.base import BeliefTrajectory
 from planning.animation import animate_results
 from planning.dynamics import DoubleIntegrator, SingleIntegrator
@@ -14,6 +18,7 @@ from planning.environment import Environment
 from planning.planner import ProbabilisticSTLPlanner, TorchGaussianBelief
 from planning.visualization import (
     PALETTE,
+    cov_ellipse_params,
     plot_covariance_ellipse,
     visualize_lane_change,
     visualize_results,
@@ -28,9 +33,9 @@ def check_collision(mean_trace, env):
     """
     Checks for collisions between the ego vehicle trajectory and environment obstacles.
     """
-    print("\n" + "=" * 30)
-    print("SAFETY VERIFICATION")
-    print("=" * 30)
+    logger.info("\n" + "=" * 30)
+    logger.info("SAFETY VERIFICATION")
+    logger.info("=" * 30)
 
     traj = mean_trace.squeeze()  # [T, 2]
     if traj.ndim == 1:
@@ -72,38 +77,34 @@ def check_collision(mean_trace, env):
         print(f"Result: SAFE. (Min Separation from Moving Obs: {min_sep:.2f})")
     else:
         print("Result: UNSAFE (Collisions Detected)")
-    print("=" * 30 + "\n")
+    logger.info("=" * 30 + "\n")
 
 
 def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
     # Detect device (GPU if available)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
+
+    cfg = load_config("configs/scenarios/single_shot.yaml")
+    planner_defaults = load_config("configs/planning.yaml")
+
+    T = cfg["T"]
+    dt = cfg["dt"]
 
     if load_from is None:
-        load_from = os.path.join(RESULTS_DIR, "single_shot.pt")
-
-    T = 130  # Time horizon
-    dt = 0.2  # Time step size
+        load_from = os.path.join(RESULTS_DIR, cfg["save_file"])
 
     # Define workspace, goal, and obstacles
     env = Environment(device=device)
-
-    # Scenario: Reach (3.5, 10.5)
-    env.set_goal(x_range=[10.0, 12.0], y_range=[2.0, 4.0])
-    env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 10.5])
-
-    # Add a visit region (waypoint)
-    env.add_visit_region(x_range=[8.0, 10.0], y_range=[7.0, 9.0])
-
-    # Add obstacles
-    # 1. Rectangle obstacle
-    env.add_obstacle(x_range=[3.0, 6.0], y_range=[0.0, 3.0])
-    env.add_obstacle(x_range=[3.0, 6.0], y_range=[4.0, 7.0])
-    env.add_obstacle(x_range=[3.0, 6.0], y_range=[7.5, 10.0])
-
-    # 2. Circle obstacle
-    # env.add_circle_obstacle(center=[5.0, 5.0], radius=1.9)
+    env.set_goal(**cfg["goal"])
+    env.set_bounds(**cfg["bounds"])
+    for vr in cfg.get("visit_regions", []):
+        env.add_visit_region(**vr)
+    for obs in cfg["obstacles"]:
+        if obs["type"] == "circle":
+            env.add_circle_obstacle(center=obs["center"], radius=obs["radius"])
+        else:
+            env.add_obstacle(x_range=obs["x_range"], y_range=obs["y_range"])
 
     if not force_run and load_from and os.path.exists(load_from):
         print(f"Loading results from {load_from}...")
@@ -116,28 +117,15 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
         print(f"Loaded data. Final Satisfaction Probability: {best_p:.4f}")
     else:
         # --- Setup Dynamics ---
-        dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.03, device=device)
+        dynamics = SingleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
 
         # --- Planner Config ---
-        # Configuration for the gradient descent
-        planner_cfg = {
-            "w_u": 0.9,  # Reduced weight to allow higher speeds
-            "w_u": 0.5,  # Reduced weight to allow higher speeds
-            "w_du": 0.01,  # Weight on smoothness
-            "w_phi": 100.0,  # Weight on STL satisfaction
-            "lr": 0.05,  # Learning rate
-            "max_iters": max_iterations,  # Max iterations
-            "alpha": 0.95,  # Success threshold
-            "w_dist": 50.0,  # Goal guidance heuristic weight
-            "w_obs": 3.0,  # Obstacle repulsion heuristic weight
-            "w_visit": 50.0,  # Visit region heuristic weight
-        }
+        planner_cfg = {**planner_defaults, **cfg["planner"], "max_iters": max_iterations}
         planner = ProbabilisticSTLPlanner(dynamics, env, T, config=planner_cfg)
 
         # --- Initial Condition ---
-        # Start at (0,0) with small uncertainty
-        x0_mean = torch.tensor([0.0, 5.0], device=device)
-        x0_cov = torch.eye(2, device=device) * 0.01
+        x0_mean = torch.tensor(cfg["x0_mean"], device=device)
+        x0_cov = torch.eye(len(cfg["x0_mean"]), device=device) * cfg["x0_cov_scale"]
 
         # --- Initialization ---
         # We pass init_guess=None to let the optimizer figure out the path
@@ -169,43 +157,41 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
         mean_trace, cov_trace, u_trace, env, history, save_prefix="single_shot"
     )
 
+    anim = cfg["animation"]
     animate_results(
         mean_trace,
         cov_trace,
         env,
-        filename="single_shot_animation.gif",
-        step=2,
-        title="Single Shot Planning",
-        bounds=([-1, 13], [-1, 11]),
+        filename=anim["filename"],
+        step=anim["step"],
+        title=anim["title"],
+        bounds=anim["bounds"],
     )
 
 
 def run_mpc(load_from=None, force_run=False):
-    # --- 1. Configuration ---
-    # Detect device (GPU if available)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
-    # MPC Parameters
-    H = 100  # Sliding Window Horizon (Lookahead)
-    MAX_STEPS = 300  # Safety limit, but we will use while loop
-    dt = 0.3  # Time step size
+    cfg = load_config("configs/scenarios/mpc.yaml")
+    planner_defaults = load_config("configs/planning.yaml")
+
+    H = cfg["H"]
+    MAX_STEPS = cfg["MAX_STEPS"]
+    dt = cfg["dt"]
+
+    if load_from is None:
+        load_from = os.path.join(RESULTS_DIR, cfg["save_file"])
 
     # Define workspace, goal, and obstacles
     env = Environment(device=device)
-
-    # Scenario: Reach (3.5, 10.5)
-    env.set_goal(x_range=[9.0, 10.0], y_range=[9.0, 10.0])
-    env.set_bounds(x_range=[-2.0, 12.0], y_range=[-2.0, 12.0])
-
-    env.add_obstacle(x_range=[0.0, 2.0], y_range=[3.0, 8.0])
-    env.add_obstacle(x_range=[2.0, 6.0], y_range=[-1.0, 1.0])
-    env.add_obstacle(x_range=[8.0, 10.0], y_range=[3.0, 8.0])
-
-    env.add_circle_obstacle(center=[5.0, 5.0], radius=1.9)
-
-    if load_from is None:
-        load_from = os.path.join(RESULTS_DIR, "mpc.pt")
+    env.set_goal(**cfg["goal"])
+    env.set_bounds(**cfg["bounds"])
+    for obs in cfg["obstacles"]:
+        if obs["type"] == "circle":
+            env.add_circle_obstacle(center=obs["center"], radius=obs["radius"])
+        else:
+            env.add_obstacle(x_range=obs["x_range"], y_range=obs["y_range"])
 
     if not force_run and os.path.exists(load_from):
         print(f"Loading MPC results from {load_from}...")
@@ -218,25 +204,14 @@ def run_mpc(load_from=None, force_run=False):
         all_plans = data["all_plans"]
     else:
         # --- Setup Dynamics ---
-        dynamics = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.02, device=device)
+        dynamics = SingleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
 
         # --- Planner Config ---
-        # Configuration for the gradient descent
-        planner_cfg = {
-            "w_u": 0.9,  # Weight on control effort
-            "w_du": 0.01,  # Weight on smoothness
-            "w_phi": 100.0,  # Weight on STL satisfaction
-            "lr": 0.05,  # Learning rate
-            "max_iters": 200,  # Fewer iters needed for MPC warm start (or short horizon)
-            "alpha": 0.95,  # Success threshold
-            "w_dist": 4.0,  # Goal guidance heuristic weight
-            "w_obs": 2.0,  # Obstacle repulsion heuristic weight
-        }
+        planner_cfg = {**planner_defaults, **cfg["planner"]}
 
         # --- Initial Condition ---
-        # Start at (0,0) with small uncertainty
-        x0_mean = torch.tensor([0.0, 0.0], device=device)
-        x0_cov = torch.eye(2, device=device) * 0.01
+        x0_mean = torch.tensor(cfg["x0_mean"], device=device)
+        x0_cov = torch.eye(len(cfg["x0_mean"]), device=device) * cfg["x0_cov_scale"]
 
         print(f"Starting MPC Execution (Horizon={H})...")
 
@@ -247,8 +222,9 @@ def run_mpc(load_from=None, force_run=False):
         curr_mean = x0_mean
         curr_cov = x0_cov
 
-        # Goal center for distance check
-        goal_center = torch.tensor([3.5, 10.5], device=device)
+        # Goal center for distance check (midpoint of goal range)
+        gx, gy = cfg["goal"]["x_range"], cfg["goal"]["y_range"]
+        goal_center = torch.tensor([(gx[0] + gx[1]) / 2, (gy[0] + gy[1]) / 2], device=device)
 
         # --- Live Visualization Setup ---
         plt.ion()
@@ -423,8 +399,6 @@ def run_mpc(load_from=None, force_run=False):
         save_prefix="mpc",
     )
 
-    # --- Animate ---
-    # Step=5 to speed up animation significantly (300 frames -> 60 frames)
     animate_results(
         full_mean_trace,
         full_cov_trace,
@@ -433,60 +407,57 @@ def run_mpc(load_from=None, force_run=False):
         plan_traces=all_plans,
         step=5,
         title="MPC Receding Horizon",
-        bounds=([-2, 12], [-2, 12]),
+        bounds=([cfg["bounds"]["x_range"][0], cfg["bounds"]["x_range"][1]],
+                [cfg["bounds"]["y_range"][0], cfg["bounds"]["y_range"][1]]),
     )
 
 
-def run_lane_change(load_from=None):
+def _run_lane_change_scenario(cfg_path):
+    """Shared implementation for all lane change scenarios.
+
+    All scenario-specific values (dynamics, planner weights, obstacle config,
+    road geometry, success thresholds) are read from the YAML file at cfg_path.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
-    H = 40  # Planning horizon (lookahead steps)
-    T_SIM = 100  # Total simulation steps
-    dt = 0.2  # Time step [s]
+    cfg = load_config(cfg_path)
+    planner_defaults = load_config("configs/planning.yaml")
+    label = cfg.get("label", "")
 
-    # Double Integrator: state [x, y, vx, vy], control [ax, ay]
-    dynamics = DoubleIntegrator(dt=dt, u_max=2.5, q_std=0.01, device=device)
+    H = cfg["H"]
+    T_SIM = cfg["T_SIM"]
+    dt = cfg["dt"]
 
-    # Planner Configuration
-    planner_cfg = {
-        "w_u": 0.02,
-        "w_du": 0.05,  # very low smoothness — sharp lateral cut allowed
-        "w_phi": 200.0,
-        "lr": 0.05,
-        "max_iters": 200,
-        "alpha": 0.90,
-        "w_dist": 22.0,  # strong goal pull — merge fast
-        "w_obs": 12.0,  # close pass but not collision
-        "w_visit": 0.0,
-        "loss_tol": 1e-5,
-    }
+    logger.info(f"\n=== Running {label} Scenario ===")
 
-    print("\n=== Running Normal Scenario ===")
+    dynamics = DoubleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+    planner_cfg = {**planner_defaults, **cfg["planner"]}
 
-    # Setup Environment for this scenario
+    # --- Global environment (road + full obstacle trajectory for collision check) ---
+    road = cfg["road"]
     env_global = Environment(device=device)
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=2.0, style="dashed")
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=-2.0, style="solid")
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=6.0, style="solid")
-    env_global.set_goal(x_range=[0.0, 200.0], y_range=[2.0, 6.0])
+    env_global.add_lane_marking(x_range=[-5, 120], y_pos=cfg["road"]["lane_divider"], style="dashed")
+    env_global.add_lane_marking(x_range=[-5, 120], y_pos=cfg["road"]["y_min"], style="solid")
+    env_global.add_lane_marking(x_range=[-5, 120], y_pos=cfg["road"]["y_max"], style="solid")
+    env_global.set_goal(**cfg["goal"])
 
-    # Moving obstacle: slower vehicle in Lane 2
+    obs_cfg = cfg["obstacle"]
     total_points = T_SIM + H + 10
     times = np.arange(total_points) * dt
-    obs_x_global = 3.0 + 0.3 * times
-    obs_y_global = np.ones_like(times) * 4.0
-
+    obs_x_global = obs_cfg["x0"] + obs_cfg["speed"] * times
+    obs_y_global = np.ones_like(times) * obs_cfg["y"]
     env_global.add_moving_obstacle(
         obs_x_global[: T_SIM + 1],
         obs_y_global[: T_SIM + 1],
-        width=2.5,
-        height=1.5,
+        width=obs_cfg["width"],
+        height=obs_cfg["height"],
     )
 
-    # Initial state: Lane 1 centre, forward velocity
-    curr_mean = torch.tensor([0.0, 0.0, 3.5, 0.0], device=device)
-    curr_cov = torch.eye(4, device=device) * 0.01
+    # --- Initial state ---
+    x0_mean = cfg["x0_mean"]
+    curr_mean = torch.tensor(x0_mean, device=device)
+    curr_cov = torch.eye(len(x0_mean), device=device) * cfg["x0_cov_scale"]
 
     real_mean_trace = [curr_mean]
     real_cov_trace = [curr_cov]
@@ -500,140 +471,61 @@ def run_lane_change(load_from=None):
     # --- Live Visualization ---
     plt.ion()
     fig, ax = plt.subplots(figsize=(14, 4))
-    # No equal aspect — road is wide, lanes are narrow; let x scroll freely
     ax.grid(True, alpha=0.3, zorder=3)
-    ax.set_title(f"Lane Change MPC (Normal) — Live Execution")
+    ax.set_title(f"Lane Change MPC ({label}) — Live Execution")
     ax.set_ylabel("$y$ [m]")
     ax.set_xlabel("$x$ [m]")
 
-    # Road background and lane structure
-    ax.axhspan(-2, 6, color=PALETTE["road"]["fill"], zorder=0)
-    ax.axhspan(
-        3.0, 5.0, color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1
-    )  # target band
-    ax.axhline(
-        -2,
-        color=PALETTE["lane"]["stroke"],
-        linewidth=2.0,
-        linestyle="-",
-        alpha=0.8,
-        zorder=2,
-    )
-    ax.axhline(
-        6,
-        color=PALETTE["lane"]["stroke"],
-        linewidth=2.0,
-        linestyle="-",
-        alpha=0.8,
-        zorder=2,
-    )
-    ax.axhline(
-        2,
-        color=PALETTE["lane"]["stroke"],
-        linewidth=1.2,
-        linestyle="--",
-        alpha=0.6,
-        zorder=2,
-    )
-    # Lane labels: x pinned to axes (so they stay on-screen as camera scrolls),
-    # y in data coordinates (so they sit at the correct lane centre).
-    _blend = blended_transform_factory(ax.transAxes, ax.transData)
-    ax.text(
-        0.02,
-        0.0,
-        "Lane 1",
-        transform=_blend,
-        color=PALETTE["lane"]["stroke"],
-        fontsize=8,
-        va="center",
-        ha="left",
-    )
-    ax.text(
-        0.02,
-        4.0,
-        "Lane 2",
-        transform=_blend,
-        color=PALETTE["lane"]["stroke"],
-        fontsize=8,
-        va="center",
-        ha="left",
-    )
+    ax.axhspan(road["y_min"], road["y_max"], color=PALETTE["road"]["fill"], zorder=0)
+    ax.axhspan(3.0, 5.0, color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1)
+    ax.axhline(road["y_min"], color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-", alpha=0.8, zorder=2)
+    ax.axhline(road["y_max"], color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-", alpha=0.8, zorder=2)
+    ax.axhline(road["lane_divider"], color=PALETTE["lane"]["stroke"], linewidth=1.2, linestyle="--", alpha=0.6, zorder=2)
 
-    # Dynamic actors
-    (ego_dot,) = ax.plot(
-        [],
-        [],
-        color=PALETTE["ego"]["stroke"],
-        marker="o",
-        markersize=8,
-        label="Ego",
-        zorder=10,
-    )
-    (ego_trail,) = ax.plot(
-        [], [], color=PALETTE["ego"]["stroke"], alpha=0.4, linewidth=1.5, zorder=9
-    )
-    (plan_line,) = ax.plot(
-        [],
-        [],
-        color=PALETTE["plan"]["stroke"],
-        linestyle="--",
-        alpha=0.8,
-        linewidth=1.5,
-        label="Plan",
-        zorder=8,
-    )
+    _blend = blended_transform_factory(ax.transAxes, ax.transData)
+    lane1_y = (road["y_min"] + road["lane_divider"]) / 2
+    lane2_y = (road["lane_divider"] + road["y_max"]) / 2
+    ax.text(0.02, lane1_y, "Lane 1", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
+    ax.text(0.02, lane2_y, "Lane 2", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
+
+    (ego_dot,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8, label="Ego", zorder=10)
+    (ego_trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], alpha=0.4, linewidth=1.5, zorder=9)
+    (plan_line,) = ax.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, linewidth=1.5, label="Plan", zorder=8)
     ego_cov_patch = patches.Ellipse(
-        (0, 0),
-        width=0,
-        height=0,
-        angle=0,
-        facecolor=PALETTE["ego"]["fill"],
-        edgecolor=PALETTE["ego"]["stroke"],
-        alpha=0.2,
-        label="Uncertainty",
-        zorder=7,
+        (0, 0), width=0, height=0, angle=0,
+        facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
+        alpha=0.2, label="Uncertainty", zorder=7,
     )
     ax.add_patch(ego_cov_patch)
-    # Obstacle — initialise at its true t=0 position
     obs_rect = patches.Rectangle(
-        (obs_x_global[0] - 1.25, obs_y_global[0] - 0.75),
-        2.5,
-        1.5,
-        facecolor=PALETTE["obs_moving"]["fill"],
-        edgecolor=PALETTE["obs_moving"]["stroke"],
-        alpha=0.8,
-        label="Other Car",
-        zorder=9,
+        (obs_x_global[0] - obs_cfg["width"] / 2, obs_y_global[0] - obs_cfg["height"] / 2),
+        obs_cfg["width"], obs_cfg["height"],
+        facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
+        alpha=0.8, label="Other Car", zorder=9,
     )
     ax.add_patch(obs_rect)
     ax.legend(loc="upper right", fontsize=8)
     ax.set_xlim(-3, 35)
-    ax.set_ylim(-3, 7)
+    ax.set_ylim(road["y_min"] - 1, road["y_max"] + 1)
 
     # --- MPC Loop ---
+    success_cfg = cfg["success"]
+    goal_lookahead = 4.0  # x-distance ahead to place local goal window
+
     for t in range(T_SIM):
         ego_pos = curr_mean.cpu().numpy()
         curr_x = ego_pos[0]
 
-        # Local environment per window.
         env_local = Environment(device=device)
+        goal_x_lo = curr_x + goal_lookahead
+        goal_x_hi = curr_x + goal_lookahead + 60.0
+        env_local.set_goal(x_range=[goal_x_lo, goal_x_hi], y_range=[cfg["goal"]["y_range"][0] + 0.1, cfg["goal"]["y_range"][1] - 0.1])
 
-        # Goal: Fill the entire lane (Lane 2: y in [2, 6])
-        # We set a long x-range ahead to encourage forward motion via the distance heuristic,
+        y_min_bound = road["y_min"] + 0.5
+        if curr_mean[1] > road["lane_divider"] - 0.5:
+            y_min_bound = road["lane_divider"]
+        env_local.set_bounds(x_range=[-100.0, 200.0], y_range=[y_min_bound, road["y_max"]])
 
-        goal_dist = 4.0
-        goal_x_lo = curr_x + goal_dist
-        goal_x_hi = curr_x + goal_dist + 60.0
-        env_local.set_goal(x_range=[goal_x_lo, goal_x_hi], y_range=[2.1, 5.9])
-
-        # Bounds: If we have successfully merged (y > 2.5), lock the bottom bound
-        # to prevent drifting back to Lane 1.
-        y_min_bound = -1.5
-        if curr_mean[1] > 2.5:
-            y_min_bound = 2.0
-        env_local.set_bounds(x_range=[-100.0, 200.0], y_range=[y_min_bound, 6.0])
-
-        # Slice moving obstacle trajectory for this window
         idx_end = t + H + 1
         if idx_end <= len(obs_x_global):
             sl_x = obs_x_global[t:idx_end]
@@ -642,9 +534,8 @@ def run_lane_change(load_from=None):
             pad = idx_end - len(obs_x_global)
             sl_x = np.concatenate([obs_x_global[t:], np.full(pad, obs_x_global[-1])])
             sl_y = np.concatenate([obs_y_global[t:], np.full(pad, obs_y_global[-1])])
-        env_local.add_moving_obstacle(sl_x, sl_y, width=2.5, height=1.5)
+        env_local.add_moving_obstacle(sl_x, sl_y, width=obs_cfg["width"], height=obs_cfg["height"])
 
-        # Warm start: shift previous solution by one step
         init_guess = None
         if prev_u_sol is not None:
             init_guess = torch.cat([prev_u_sol[1:], prev_u_sol[-1:]], dim=0)
@@ -659,7 +550,6 @@ def run_lane_change(load_from=None):
         loss_trace.append(history[-1] if history else 0.0)
         p_sat_trace.append(p_val)
 
-        # Execute first action (receding horizon)
         u_curr = p_u[0]
         pred_mean, next_cov = dynamics.step(curr_mean, curr_cov, u_curr)
         noise = torch.distributions.MultivariateNormal(
@@ -685,21 +575,14 @@ def run_lane_change(load_from=None):
                 f"Obs x={obs_pos[0]:.2f} | Dist: {dist:.2f} | P(φ)={p_val:.3f}"
             )
 
-        # Update live plot — camera scrolls with ego, keeping obs in view
         ego_x, ego_y = ego_pos[0], ego_pos[1]
-        # view_center = (ego_x + obs_pos[0]) / 2.0
-        # ax.set_xlim(view_center - 14, view_center + 14)
         ego_dot.set_data([ego_x], [ego_y])
         ego_trail.set_data(
             [m[0].item() for m in real_mean_trace],
             [m[1].item() for m in real_mean_trace],
         )
 
-        pos_cov_np = curr_cov[:2, :2].cpu().numpy()
-        vals, vecs = np.linalg.eigh(pos_cov_np)
-        order = vals.argsort()[::-1]
-        theta = np.degrees(np.arctan2(*vecs[:, order][:, 0][::-1]))
-        w_e, h_e = 2 * 2.45 * np.sqrt(vals[order])
+        theta, w_e, h_e = cov_ellipse_params(curr_cov[:2, :2].cpu().numpy())
         ego_cov_patch.set_center((ego_x, ego_y))
         ego_cov_patch.set_width(w_e)
         ego_cov_patch.set_height(h_e)
@@ -707,25 +590,23 @@ def run_lane_change(load_from=None):
 
         plan_np = p_mean.detach().cpu().squeeze().numpy()
         plan_line.set_data(plan_np[:, 0], plan_np[:, 1])
-        obs_rect.set_xy((obs_pos[0] - 1.25, obs_pos[1] - 0.75))
+        obs_rect.set_xy((obs_pos[0] - obs_cfg["width"] / 2, obs_pos[1] - obs_cfg["height"] / 2))
 
         plt.draw()
         plt.pause(0.001)
 
-        # Success: stably inside Lane 2 for 15 consecutive steps
-        if 3.0 <= ego_pos[1] <= 5.5:
+        if success_cfg["y_min"] <= ego_pos[1] <= success_cfg["y_max"]:
             success_counter += 1
         else:
             success_counter = 0
 
-        if success_counter >= 15:
-            print(f"Lane change completed successfully at step {t}!")
+        if success_counter >= success_cfg["consecutive_steps"]:
+            print(f"Lane change ({label}) completed at step {t}!")
             break
 
     plt.ioff()
     plt.close(fig)
 
-    # Truncate obstacle trajectory to actual simulation length
     actual_steps = len(real_mean_trace)
     for obs in env_global.moving_obstacles:
         obs["x_traj"] = obs["x_traj"][:actual_steps]
@@ -735,387 +616,56 @@ def run_lane_change(load_from=None):
     full_cov_trace = torch.stack(real_cov_trace).unsqueeze(0)
     full_u_trace = torch.stack(real_u_trace).unsqueeze(0)
 
+    save_path = os.path.join(RESULTS_DIR, cfg["save_file"])
     torch.save(
-        {
-            "mean_trace": full_mean_trace,
-            "cov_trace": full_cov_trace,
-            "u_trace": full_u_trace,
-            "env": env_global,
-        },
-        os.path.join(RESULTS_DIR, "lane_change_normal.pt"),
+        {"mean_trace": full_mean_trace, "cov_trace": full_cov_trace, "u_trace": full_u_trace, "env": env_global},
+        save_path,
     )
 
     check_collision(full_mean_trace, env_global)
 
-    print(f"Generating visualization for Normal...")
+    save_prefix = cfg["save_file"].replace(".pt", "")
+    logger.info(f"Generating visualization for {label}...")
     visualize_lane_change(
-        full_mean_trace,
-        full_cov_trace,
-        full_u_trace,
-        env_global,
-        p_sat_trace=p_sat_trace,
-        dt=dt,
-        robot_dims=(2.0, 1.0),
-        save_prefix=f"lane_change_normal",
-        comparison_data=None,
-        xlim=[-3, 35],
+        full_mean_trace, full_cov_trace, full_u_trace, env_global,
+        p_sat_trace=p_sat_trace, dt=dt, robot_dims=(2.0, 1.0),
+        save_prefix=save_prefix, comparison_data=None, xlim=[-3, 35],
     )
 
     animate_results(
-        full_mean_trace,
-        full_cov_trace,
-        env_global,
-        filename=f"lane_change_normal.gif",
-        plan_traces=all_plans,
-        step=4,
-        robot_dims=(2.0, 1.0),
-        title=f"Lane Change: Normal",
-        bounds=None,
+        full_mean_trace, full_cov_trace, env_global,
+        filename=f"{save_prefix}.gif",
+        plan_traces=all_plans, step=4, robot_dims=(2.0, 1.0),
+        title=f"Lane Change: {label}", bounds=None,
     )
+
+    return full_mean_trace, full_cov_trace, full_u_trace, env_global, p_sat_trace, dt
+
+
+def run_lane_change():
+    _run_lane_change_scenario("configs/scenarios/lane_change.yaml")
 
 
 def run_lane_change_aggressive():
-    """
-    Aggressive lane change: same road and vehicle as normal, but the obstacle
-    starts close ahead and moves slowly (creating immediate urgency), the ego
-    starts at higher velocity, and the planner is tuned for a sharp, fast merge.
-    """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    normal_cfg_path = "configs/scenarios/lane_change.yaml"
+    agg_cfg_path = "configs/scenarios/lane_change_aggressive.yaml"
 
-    H = 40
-    T_SIM = 100
-    dt = 0.2
+    # Run aggressive scenario
+    agg_mean, agg_cov, agg_u, agg_env, _, dt = _run_lane_change_scenario(agg_cfg_path)
 
-    dynamics = DoubleIntegrator(dt=dt, u_max=2.5, q_std=0.01, device=device)
-
-    planner_cfg = {
-        "w_u": 0.05,
-        "w_du": 6.0,  # high smoothness — very gradual arc
-        "w_phi": 100.0,
-        "lr": 0.05,
-        "max_iters": 200,
-        "alpha": 0.90,
-        "w_dist": 22.0,
-        "w_obs": 8.0,
-        "w_visit": 0.0,
-        "loss_tol": 1e-5,
-    }
-
-    print("\n=== Running Aggressive Scenario ===")
-
-    # Same road geometry as normal
-    env_global = Environment(device=device)
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=2.0, style="dashed")
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=-2.0, style="solid")
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=6.0, style="solid")
-    env_global.set_goal(x_range=[0.0, 200.0], y_range=[2.0, 6.0])
-
-    # Obstacle: starts very close at x=3, moves slowly (0.3 m/s) — ego at 3.5 m/s rushes up immediately
-    total_points = T_SIM + H + 10
-    times = np.arange(total_points) * dt
-    obs_x_global = 7.0 + 0.8 * times
-    obs_y_global = np.ones_like(times) * 4.0
-
-    env_global.add_moving_obstacle(
-        obs_x_global[: T_SIM + 1],
-        obs_y_global[: T_SIM + 1],
-        width=2.5,
-        height=1.5,
-    )
-
-    curr_mean = torch.tensor([0.0, 0.0, 3.5, 0.0], device=device)
-    curr_cov = torch.eye(4, device=device) * 0.01
-
-    real_mean_trace = [curr_mean]
-    real_cov_trace = [curr_cov]
-    real_u_trace = []
-    loss_trace = []
-    p_sat_trace = []
-    all_plans = []
-    prev_u_sol = None
-    success_counter = 0
-
-    # --- Live Visualization ---
-    plt.ion()
-    fig, ax = plt.subplots(figsize=(14, 4))
-    ax.grid(True, alpha=0.3, zorder=3)
-    ax.set_title("Lane Change MPC (Aggressive) — Live Execution")
-    ax.set_ylabel("$y$ [m]")
-    ax.set_xlabel("$x$ [m]")
-
-    ax.axhspan(-2, 6, color=PALETTE["road"]["fill"], zorder=0)
-    ax.axhspan(3.0, 5.0, color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1)
-    ax.axhline(
-        -2,
-        color=PALETTE["lane"]["stroke"],
-        linewidth=2.0,
-        linestyle="-",
-        alpha=0.8,
-        zorder=2,
-    )
-    ax.axhline(
-        6,
-        color=PALETTE["lane"]["stroke"],
-        linewidth=2.0,
-        linestyle="-",
-        alpha=0.8,
-        zorder=2,
-    )
-    ax.axhline(
-        2,
-        color=PALETTE["lane"]["stroke"],
-        linewidth=1.2,
-        linestyle="--",
-        alpha=0.6,
-        zorder=2,
-    )
-
-    _blend = blended_transform_factory(ax.transAxes, ax.transData)
-    ax.text(
-        0.02,
-        0.0,
-        "Lane 1",
-        transform=_blend,
-        color=PALETTE["lane"]["stroke"],
-        fontsize=8,
-        va="center",
-        ha="left",
-    )
-    ax.text(
-        0.02,
-        4.0,
-        "Lane 2",
-        transform=_blend,
-        color=PALETTE["lane"]["stroke"],
-        fontsize=8,
-        va="center",
-        ha="left",
-    )
-
-    (ego_dot,) = ax.plot(
-        [],
-        [],
-        color=PALETTE["ego"]["stroke"],
-        marker="o",
-        markersize=8,
-        label="Ego",
-        zorder=10,
-    )
-    (ego_trail,) = ax.plot(
-        [], [], color=PALETTE["ego"]["stroke"], alpha=0.4, linewidth=1.5, zorder=9
-    )
-    (plan_line,) = ax.plot(
-        [],
-        [],
-        color=PALETTE["plan"]["stroke"],
-        linestyle="--",
-        alpha=0.8,
-        linewidth=1.5,
-        label="Plan",
-        zorder=8,
-    )
-    ego_cov_patch = patches.Ellipse(
-        (0, 0),
-        width=0,
-        height=0,
-        angle=0,
-        facecolor=PALETTE["ego"]["fill"],
-        edgecolor=PALETTE["ego"]["stroke"],
-        alpha=0.2,
-        label="Uncertainty",
-        zorder=7,
-    )
-    ax.add_patch(ego_cov_patch)
-    obs_rect = patches.Rectangle(
-        (obs_x_global[0] - 1.25, obs_y_global[0] - 0.75),
-        2.5,
-        1.5,
-        facecolor=PALETTE["obs_moving"]["fill"],
-        edgecolor=PALETTE["obs_moving"]["stroke"],
-        alpha=0.8,
-        label="Other Car",
-        zorder=9,
-    )
-    ax.add_patch(obs_rect)
-    ax.legend(loc="upper right", fontsize=8)
-    ax.set_xlim(-3, 35)
-    ax.set_ylim(-3, 7)
-
-    # --- MPC Loop ---
-    for t in range(T_SIM):
-        ego_pos = curr_mean.cpu().numpy()
-        curr_x = ego_pos[0]
-
-        env_local = Environment(device=device)
-
-        goal_dist = 10.0
-        goal_x_lo = curr_x + goal_dist
-        goal_x_hi = curr_x + goal_dist + 60.0
-        env_local.set_goal(x_range=[goal_x_lo, goal_x_hi], y_range=[2.1, 5.9])
-
-        y_min_bound = -1.5
-        if curr_mean[1] > 2.5:
-            y_min_bound = 2.0
-        env_local.set_bounds(x_range=[-100.0, 200.0], y_range=[y_min_bound, 6.0])
-
-        idx_end = t + H + 1
-        if idx_end <= len(obs_x_global):
-            sl_x = obs_x_global[t:idx_end]
-            sl_y = obs_y_global[t:idx_end]
-        else:
-            pad = idx_end - len(obs_x_global)
-            sl_x = np.concatenate([obs_x_global[t:], np.full(pad, obs_x_global[-1])])
-            sl_y = np.concatenate([obs_y_global[t:], np.full(pad, obs_y_global[-1])])
-        env_local.add_moving_obstacle(sl_x, sl_y, width=2.5, height=1.5)
-
-        init_guess = None
-        if prev_u_sol is not None:
-            init_guess = torch.cat([prev_u_sol[1:], prev_u_sol[-1:]], dim=0)
-
-        planner = ProbabilisticSTLPlanner(dynamics, env_local, T=H, config=planner_cfg)
-        p_mean, p_cov, p_u, p_val, history = planner.solve(
-            curr_mean, curr_cov, render=False, verbose=False, init_guess=init_guess
-        )
-
-        prev_u_sol = p_u.detach()
-        all_plans.append(p_mean)
-        loss_trace.append(history[-1] if history else 0.0)
-        p_sat_trace.append(p_val)
-
-        u_curr = p_u[0]
-        pred_mean, next_cov = dynamics.step(curr_mean, curr_cov, u_curr)
-        noise = torch.distributions.MultivariateNormal(
-            torch.zeros_like(pred_mean), dynamics.Q
-        ).sample()
-        next_mean = pred_mean + noise
-
-        real_mean_trace.append(next_mean)
-        real_cov_trace.append(next_cov)
-        real_u_trace.append(u_curr)
-
-        curr_mean = next_mean
-        curr_cov = next_cov
-
-        obs_pos = np.array([obs_x_global[t], obs_y_global[t]])
-        ego_pos = curr_mean.cpu().numpy()
-        dist = np.linalg.norm(ego_pos[:2] - obs_pos)
-
-        if t % 5 == 0:
-            print(
-                f"Step {t:03d} | Ego: [{ego_pos[0]:.2f}, {ego_pos[1]:.2f}]"
-                f" vx={ego_pos[2]:.2f} vy={ego_pos[3]:.2f} | "
-                f"Obs x={obs_pos[0]:.2f} | Dist: {dist:.2f} | P(φ)={p_val:.3f}"
-            )
-
-        ego_x, ego_y = ego_pos[0], ego_pos[1]
-        ego_dot.set_data([ego_x], [ego_y])
-        ego_trail.set_data(
-            [m[0].item() for m in real_mean_trace],
-            [m[1].item() for m in real_mean_trace],
-        )
-
-        pos_cov_np = curr_cov[:2, :2].cpu().numpy()
-        vals, vecs = np.linalg.eigh(pos_cov_np)
-        order = vals.argsort()[::-1]
-        theta = np.degrees(np.arctan2(*vecs[:, order][:, 0][::-1]))
-        w_e, h_e = 2 * 2.45 * np.sqrt(vals[order])
-        ego_cov_patch.set_center((ego_x, ego_y))
-        ego_cov_patch.set_width(w_e)
-        ego_cov_patch.set_height(h_e)
-        ego_cov_patch.set_angle(theta)
-
-        plan_np = p_mean.detach().cpu().squeeze().numpy()
-        plan_line.set_data(plan_np[:, 0], plan_np[:, 1])
-        obs_rect.set_xy((obs_pos[0] - 1.25, obs_pos[1] - 0.75))
-
-        plt.draw()
-        plt.pause(0.001)
-
-        if 3.0 <= ego_pos[1] <= 5.5:
-            success_counter += 1
-        else:
-            success_counter = 0
-
-        if success_counter >= 15:
-            print(f"Aggressive lane change completed at step {t}!")
-            break
-
-    plt.ioff()
-    plt.close(fig)
-
-    actual_steps = len(real_mean_trace)
-    for obs in env_global.moving_obstacles:
-        obs["x_traj"] = obs["x_traj"][:actual_steps]
-        obs["y_traj"] = obs["y_traj"][:actual_steps]
-
-    full_mean_trace = torch.stack(real_mean_trace).unsqueeze(0)
-    full_cov_trace = torch.stack(real_cov_trace).unsqueeze(0)
-    full_u_trace = torch.stack(real_u_trace).unsqueeze(0)
-
-    torch.save(
-        {
-            "mean_trace": full_mean_trace,
-            "cov_trace": full_cov_trace,
-            "u_trace": full_u_trace,
-            "env": env_global,
-        },
-        os.path.join(RESULTS_DIR, "lane_change_aggressive.pt"),
-    )
-
-    check_collision(full_mean_trace, env_global)
-
-    print("Generating visualization for Aggressive...")
-    visualize_lane_change(
-        full_mean_trace,
-        full_cov_trace,
-        full_u_trace,
-        env_global,
-        p_sat_trace=p_sat_trace,
-        dt=dt,
-        robot_dims=(2.0, 1.0),
-        save_prefix="lane_change_aggressive",
-        comparison_data=None,
-        xlim=[-3, 35],
-    )
-
-    animate_results(
-        full_mean_trace,
-        full_cov_trace,
-        env_global,
-        filename="lane_change_aggressive.gif",
-        plan_traces=all_plans,
-        step=4,
-        robot_dims=(2.0, 1.0),
-        title="Lane Change: Aggressive",
-        bounds=None,
-    )
-
-    # --- Combined snapshot comparison (Normal vs Aggressive) ---
-    normal_res_path = os.path.join(RESULTS_DIR, "lane_change_normal.pt")
+    # Generate Normal vs Aggressive comparison if normal results exist
+    normal_cfg = load_config(normal_cfg_path)
+    normal_res_path = os.path.join(RESULTS_DIR, normal_cfg["save_file"])
     if os.path.exists(normal_res_path):
+        device = agg_mean.device
         print("Generating Normal vs Aggressive comparison snapshots...")
-        normal_data = torch.load(
-            normal_res_path, map_location=device, weights_only=False
-        )
+        normal_data = torch.load(normal_res_path, map_location=device, weights_only=False)
         visualize_lane_change(
-            normal_data["mean_trace"],
-            normal_data["cov_trace"],
-            normal_data["u_trace"],
-            normal_data["env"],
-            p_sat_trace=None,
-            dt=dt,
-            robot_dims=(2.0, 1.0),
+            normal_data["mean_trace"], normal_data["cov_trace"], normal_data["u_trace"],
+            normal_data["env"], p_sat_trace=None, dt=dt, robot_dims=(2.0, 1.0),
             save_prefix="lane_change_compare",
-            comparison_data={
-                "mean_trace": full_mean_trace,
-                "cov_trace": full_cov_trace,
-                "env": env_global,
-            },
+            comparison_data={"mean_trace": agg_mean, "cov_trace": agg_cov, "env": agg_env},
             xlim=[-3, 35],
-        )
-        print(
-            "Comparison snapshots saved to lane_change_compare_compare_snaps.pdf and lane_change_compare_compare_traj.pdf"
         )
 
 
@@ -1375,19 +925,19 @@ def _print_comparison_table(results, n_trials):
 
     header = f"{'Metric':<38} {'STLCG (det.)':>26} {'pdSTL (ours)':>26}"
     sep = "-" * len(header)
-    print("\n" + "=" * len(header))
-    print("CALIBRATION COMPARISON: Deterministic (STLCG) vs. Probabilistic (pdSTL)")
-    print("=" * len(header))
-    print(header)
-    print(sep)
+    logger.info("\n" + "=" * len(header))
+    logger.info("CALIBRATION COMPARISON: Deterministic (STLCG) vs. Probabilistic (pdSTL)")
+    logger.info("=" * len(header))
+    logger.info(header)
+    logger.info(sep)
     for name, d_val, p_val in rows:
         print(f"{name:<38} {d_val:>26} {p_val:>26}")
-    print(sep)
-    print("  NOTE: '—' means no probabilistic certificate is issued by the planner.")
+    logger.info(sep)
+    logger.info("  NOTE: '—' means no probabilistic certificate is issued by the planner.")
     print(
         "        pdSTL ρ↓(planning) ≤ MC success by construction → calibrated guarantee."
     )
-    print("=" * len(header) + "\n")
+    logger.info("=" * len(header) + "\n")
 
     return rows
 
@@ -1458,7 +1008,7 @@ def _save_latex_table(results, n_trials, filename="single_shot_comparison_table.
 
     with open(filename, "w") as f:
         f.write("\n".join(lines) + "\n")
-    print(f"LaTeX table saved to {filename}")
+    logger.info(f"LaTeX table saved to {filename}")
 
 
 def _check_trace_success(trace, env):
@@ -1525,7 +1075,7 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     to measure empirical success rates.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     T = 130
     dt = 0.2
@@ -1576,11 +1126,11 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     # Re-evaluate the STL formula to get [P_lower, P_upper] at t=0.
     # P_lower uses Fréchet bounds (conservative, provably correct).
     # P_upper uses min-upper bound (optimistic but still a valid upper bound).
-    print("\nEvaluating probabilistic STL bounds on saved trajectory...")
+    logger.info("\nEvaluating probabilistic STL bounds on saved trajectory...")
     p_lower_prob, p_upper_prob = _evaluate_stl_bounds(
         mean_trace_prob, cov_trace_prob, env, T, device
     )
-    print(f"  P_lower = {p_lower_prob:.4f}  |  P_upper = {p_upper_prob:.4f}")
+    logger.info(f"  P_lower = {p_lower_prob:.4f}  |  P_upper = {p_upper_prob:.4f}")
 
     # ------------------------------------------------------------------ #
     # Plan B — Deterministic / STLCG-style (signed-distance robustness)
@@ -1593,7 +1143,7 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     # Always run the deterministic planner live so we see the optimisation unfold
     # alongside the probabilistic planner. Uses zero noise (q_std=0.0) and
     # loss_fn=-p to maximise signed-distance robustness η directly (stlcg-style).
-    print("Running deterministic planner (stlcg-style, q_std=0.0)...")
+    logger.info("Running deterministic planner (stlcg-style, q_std=0.0)...")
     dyn_det = SingleIntegrator(dt=dt, u_max=1.0, q_std=0.0, device=device)
     planner_det = ProbabilisticSTLPlanner(dyn_det, env, T, config=planner_cfg)
     mu_det, cov_det, u_det, best_eta, history_det = planner_det.solve(
@@ -1611,20 +1161,20 @@ def run_single_shot_comparison(n_trials=100, force_run=False):
     #         nominally valid (η > 0), so the difference is purely in noise handling.
     eta_det = _evaluate_det_robustness(mu_det, det_spec, T, device)
     eta_prob = _evaluate_det_robustness(mean_trace_prob, det_spec, T, device)
-    print(f"\nDeterministic STL robustness  η_det  = {eta_det:.4f}")
-    print(f"Probabilistic plan η (post-hoc) η_prob = {eta_prob:.4f}")
+    logger.info(f"\nDeterministic STL robustness  η_det  = {eta_det:.4f}")
+    logger.info(f"Probabilistic plan η (post-hoc) η_prob = {eta_prob:.4f}")
 
     # ------------------------------------------------------------------ #
     # Monte Carlo Evaluation
     # ------------------------------------------------------------------ #
-    print(f"\nRunning {n_trials} MC trials per method (true q_std={true_q_std})...")
+    logger.info(f"\nRunning {n_trials} MC trials per method (true q_std={true_q_std})...")
 
-    print("  Evaluating deterministic plan...")
+    logger.info("  Evaluating deterministic plan...")
     det_results = _run_mc_trials(
         u_det.squeeze(0), env, x0_mean, T, dt, true_q_std, n_trials, device
     )
 
-    print("  Evaluating probabilistic plan...")
+    logger.info("  Evaluating probabilistic plan...")
     prob_results = _run_mc_trials(
         u_prob.squeeze(0), env, x0_mean, T, dt, true_q_std, n_trials, device
     )

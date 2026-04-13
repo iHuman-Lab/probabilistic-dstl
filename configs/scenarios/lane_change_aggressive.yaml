@@ -1,0 +1,56 @@
+# Aggressive lane change scenario.
+# Obstacle starts close ahead and moves quickly, forcing an immediate, sharp merge.
+# Same road geometry as lane_change.yaml — only obstacle position and planner tuning differ.
+
+# --- Dynamics (identical to normal lane change) ---
+dynamics: double_integrator
+H: 40
+T_SIM: 100
+dt: 0.2
+u_max: 2.5
+q_std: 0.01
+
+# --- Initial condition (identical to normal) ---
+x0_mean: [0.0, 0.0, 3.5, 0.0]
+x0_cov_scale: 0.01
+
+# --- Road geometry (identical to normal) ---
+road:
+  y_min: -2.0
+  y_max: 6.0
+  lane_divider: 2.0
+
+# --- Goal (identical to normal) ---
+goal:
+  x_range: [0.0, 200.0]
+  y_range: [2.0, 6.0]
+
+# --- Moving obstacle (closer start, faster speed = more urgency) ---
+obstacle:
+  x0: 7.0          # Starts much closer
+  speed: 0.8        # Moves faster than ego, so gap closes quickly
+  y: 4.0
+  width: 2.5
+  height: 1.5
+
+# --- Success criterion (identical to normal) ---
+success:
+  y_min: 3.0
+  y_max: 5.5
+  consecutive_steps: 15
+
+# --- Planner overrides (tuned for sharp, fast merge) ---
+planner:
+  w_u: 0.05
+  w_du: 6.0         # High smoothness — gradual arc despite urgency
+  w_phi: 100.0
+  max_iters: 200
+  alpha: 0.90
+  w_dist: 22.0
+  w_obs: 8.0
+  w_visit: 0.0
+  loss_tol: 1.0e-5
+
+# --- Output ---
+save_file: lane_change_aggressive.pt
+label: "Aggressive"

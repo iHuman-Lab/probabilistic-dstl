@@ -1,6 +1,35 @@
+import math
+
 import torch
 
 from pdstl.operators import Always, And, Eventually, STL_Formula
+
+
+def extract_trajectory_stats(belief_trajectory, diagonal_only=True):
+    """Stack mean and covariance tensors from a belief trajectory.
+
+    Parameters
+    ----------
+    belief_trajectory : list of TorchGaussianBelief
+    diagonal_only : bool
+        If True, extract only the diagonal of full covariance matrices,
+        returning var of shape [Batch, Time, Dim].
+        If False, stack full covariance matrices as-is.
+
+    Returns
+    -------
+    mu  : Tensor [Batch, Time, Dim]
+    var : Tensor [Batch, Time, Dim] (diagonal_only=True)
+          or [Batch, Time, Dim] / [Batch, Time, Dim, Dim] (diagonal_only=False)
+    """
+    means, vars_ = [], []
+    for belief in belief_trajectory:
+        means.append(belief.mean_full)
+        if diagonal_only and belief.var_full.ndim > 2:
+            vars_.append(torch.diagonal(belief.var_full, dim1=-2, dim2=-1))
+        else:
+            vars_.append(belief.var_full)
+    return torch.stack(means, dim=1), torch.stack(vars_, dim=1)
 
 
 class Environment:
@@ -162,7 +191,7 @@ def normal_cdf(value, mean, var):
     """
     std = torch.sqrt(var + 1e-6)  # Add epsilon for stability
     z = (value - mean) / std
-    return 0.5 * (1 + torch.erf(z / 1.41421356))  # 1.414... is sqrt(2)
+    return 0.5 * (1 + torch.erf(z / math.sqrt(2)))
 
 
 class RectangularGoalPredicate(STL_Formula):
@@ -181,25 +210,7 @@ class RectangularGoalPredicate(STL_Formula):
 
         # 1. Extract Means and Variances
 
-        means = []
-        vars_diag = []
-
-        # Assuming belief_trajectory is a list of Belief objects or similar wrapper
-        # We extract the underlying tensors
-        for belief in belief_trajectory:
-            means.append(belief.mean_full)
-            # If cov is full matrix [B, D, D], take diagonal. If [B, D], take as is.
-            if belief.var_full.ndim > 2:
-                # Taking diagonal: [B, D]
-                diag = torch.diagonal(belief.var_full, dim1=-2, dim2=-1)
-                vars_diag.append(diag)
-            else:
-                vars_diag.append(belief.var_full)
-
-        # Stack to [Batch, Time, Dim]
-        # Dim 0 = x, Dim 1 = y
-        mu = torch.stack(means, dim=1)
-        var = torch.stack(vars_diag, dim=1)
+        mu, var = extract_trajectory_stats(belief_trajectory)
 
         mu_x, mu_y = mu[..., 0], mu[..., 1]
         var_x, var_y = var[..., 0], var[..., 1]
@@ -233,20 +244,7 @@ class RectangularObstaclePredicate(STL_Formula):
         self.y_min, self.y_max = region["y"]
 
     def robustness_trace(self, belief_trajectory, **kwargs):
-        # 1. Extract Means and Variances (Same as Goal)
-        means = []
-        vars_diag = []
-
-        for belief in belief_trajectory:
-            means.append(belief.mean_full)
-            if belief.var_full.ndim > 2:
-                diag = torch.diagonal(belief.var_full, dim1=-2, dim2=-1)
-                vars_diag.append(diag)
-            else:
-                vars_diag.append(belief.var_full)
-
-        mu = torch.stack(means, dim=1)
-        var = torch.stack(vars_diag, dim=1)
+        mu, var = extract_trajectory_stats(belief_trajectory)
 
         mu_x, mu_y = mu[..., 0], mu[..., 1]
         var_x, var_y = var[..., 0], var[..., 1]
@@ -288,17 +286,7 @@ class CircularObstaclePredicate(STL_Formula):
         self.radius = circle_def["radius"]
 
     def robustness_trace(self, belief_trajectory, **kwargs):
-        means = []
-        covs = []
-
-        for belief in belief_trajectory:
-            means.append(belief.mean_full)
-            covs.append(belief.var_full)
-
-        mu = torch.stack(means, dim=1)  # [Batch, Time, Dim]
-        sigma_stack = torch.stack(
-            covs, dim=1
-        )  # [Batch, Time, Dim] or [Batch, Time, Dim, Dim]
+        mu, sigma_stack = extract_trajectory_stats(belief_trajectory, diagonal_only=False)
 
         # Distance vector from center
         diff = mu - self.center
@@ -338,19 +326,7 @@ class MovingRectangularObstaclePredicate(STL_Formula):
         self.height = obs_def["height"]
 
     def robustness_trace(self, belief_trajectory, **kwargs):
-        means = []
-        vars_diag = []
-
-        for belief in belief_trajectory:
-            means.append(belief.mean_full)
-            if belief.var_full.ndim > 2:
-                diag = torch.diagonal(belief.var_full, dim1=-2, dim2=-1)
-                vars_diag.append(diag)
-            else:
-                vars_diag.append(belief.var_full)
-
-        mu = torch.stack(means, dim=1)  # [Batch, Time, Dim]
-        var = torch.stack(vars_diag, dim=1)
+        mu, var = extract_trajectory_stats(belief_trajectory)
 
         mu_x, mu_y = mu[..., 0], mu[..., 1]
         var_x, var_y = var[..., 0], var[..., 1]
