@@ -6,6 +6,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from pdstl.base import BeliefTrajectory, Belief
+from utils import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +36,7 @@ class ProbabilisticSTLPlanner:
         self.T = T
         self.device = dynamics.device
 
-        self.cfg = {
-            "w_u": 0.1,        # Control effort weight
-            "w_du": 0.1,       # Smoothness weight
-            "w_phi": 10.0,     # STL satisfaction weight
-            "lr": 0.05,        # Adam learning rate
-            "max_iters": 500,  # Maximum iterations
-            "alpha": 0.95,     # Satisfaction threshold for early stopping
-            "w_dist": 5.0,     # Goal guidance heuristic weight
-            "w_obs": 5.0,      # Obstacle repulsion heuristic weight
-            "w_visit": 5.0,    # Visit region heuristic weight
-            "loss_tol": 1e-4,  # Loss convergence tolerance
-        }
-        if config:
-            self.cfg.update(config)
+        self.cfg = {**load_config("configs/planning.yaml"), **(config or {})}
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -78,7 +66,7 @@ class ProbabilisticSTLPlanner:
     def _obs_repulsion_loss(self, mean_trace):
         """Penalise trajectory points that are too close to obstacle centres."""
         loss = torch.tensor(0.0, device=self.device)
-        margin = 0.75
+        margin = self.cfg["obs_margin"]
 
         for obs in self.env.obstacles:
             cx = (obs["x"][0] + obs["x"][1]) / 2.0
@@ -132,9 +120,7 @@ class ProbabilisticSTLPlanner:
             + self.cfg["w_visit"]* self._visit_loss(mean_trace)
         )
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+
 
     def solve(self, x0_mean, x0_cov, render=False, verbose=True, spec=None, init_guess=None, loss_fn=None):
         """Find optimal controls via gradient descent on the STL objective.
@@ -216,13 +202,13 @@ class ProbabilisticSTLPlanner:
 
             if loss_fn is None and current_p >= self.cfg["alpha"]:
                 converged_iters += 1
-                if converged_iters >= 50:
+                if converged_iters >= self.cfg["converge_patience"]:
                     logger.info(f"Converged at iter {k}. P(Sat): {current_p:.4f}")
                     break
             else:
                 converged_iters = 0
 
-            if abs(prev_loss - J.item()) < self.cfg["loss_tol"] and k > 10:
+            if abs(prev_loss - J.item()) < self.cfg["loss_tol"] and k > self.cfg["min_iters"]:
                 if verbose:
                     logger.info(f"Loss converged at iter {k}.")
                 break

@@ -1,6 +1,7 @@
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
+from matplotlib.transforms import blended_transform_factory
 import numpy as np
 import torch
 
@@ -960,3 +961,121 @@ def _plot_lc_snapshots(
         )
 
     return legend_handles
+
+
+# ---------------------------------------------------------------------------
+# Live-execution plot helpers (used during MPC runs)
+# ---------------------------------------------------------------------------
+
+def setup_mpc_live_plot(env):
+    """Create the two-panel live figure for MPC execution.
+
+    Returns
+    -------
+    fig, ax_map, ax_p, line_exec, line_plan, line_p
+    """
+    plt.ion()
+    fig = plt.figure(figsize=(14, 6))
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.5, 1])
+    ax_map = fig.add_subplot(gs[0])
+    ax_p = fig.add_subplot(gs[1])
+
+    ax_map.set_xlim(-2, 12)
+    ax_map.set_ylim(-2, 12)
+    ax_map.set_aspect("equal")
+    ax_map.grid(True, alpha=0.3)
+    ax_map.set_title("MPC Live Execution")
+
+    if env.goal:
+        gx, gy = env.goal["x"], env.goal["y"]
+        ax_map.add_patch(patches.Rectangle(
+            (gx[0], gy[0]), gx[1] - gx[0], gy[1] - gy[0],
+            facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.3,
+        ))
+    for obs in env.obstacles:
+        ox, oy = obs["x"], obs["y"]
+        ax_map.add_patch(patches.Rectangle(
+            (ox[0], oy[0]), ox[1] - ox[0], oy[1] - oy[0],
+            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.5,
+        ))
+    for obs in env.circle_obstacles:
+        ax_map.add_patch(patches.Circle(
+            obs["center"], obs["radius"],
+            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.5,
+        ))
+
+    (line_exec,) = ax_map.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", label="Executed Path")
+    (line_plan,) = ax_map.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, label="Planned Window")
+    ax_map.legend(loc="upper left")
+
+    ax_p.set_xlim(0, 100)
+    ax_p.set_ylim(0, 1.1)
+    ax_p.set_title("Window Satisfaction Prob")
+    ax_p.set_xlabel("Step")
+    ax_p.set_ylabel("P(Sat)")
+    ax_p.grid(True)
+    (line_p,) = ax_p.plot([], [], color=PALETTE["goal"]["stroke"], marker="o", markersize=3)
+
+    return fig, ax_map, ax_p, line_exec, line_plan, line_p
+
+
+def setup_lane_change_live_plot(road, obs_cfg, obs_x0, obs_y0, success_cfg, label=""):
+    """Create the live-execution figure for lane-change MPC.
+
+    Parameters
+    ----------
+    road : dict
+        Road geometry keys: y_min, y_max, lane_divider.
+    obs_cfg : dict
+        Obstacle config with width and height.
+    obs_x0, obs_y0 : float
+        Initial obstacle position for placing the rectangle patch.
+    success_cfg : dict
+        Success thresholds: y_min, y_max (used for goal highlight band).
+    label : str
+        Scenario label shown in the title.
+
+    Returns
+    -------
+    fig, ax, ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect
+    """
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(14, 4))
+    ax.grid(True, alpha=0.3, zorder=3)
+    ax.set_title(f"Lane Change MPC ({label}) — Live Execution")
+    ax.set_ylabel("$y$ [m]")
+    ax.set_xlabel("$x$ [m]")
+
+    ax.axhspan(road["y_min"], road["y_max"], color=PALETTE["road"]["fill"], zorder=0)
+    ax.axhspan(success_cfg["y_min"], success_cfg["y_max"], color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1)
+    ax.axhline(road["y_min"], color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-", alpha=0.8, zorder=2)
+    ax.axhline(road["y_max"], color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-", alpha=0.8, zorder=2)
+    ax.axhline(road["lane_divider"], color=PALETTE["lane"]["stroke"], linewidth=1.2, linestyle="--", alpha=0.6, zorder=2)
+
+    _blend = blended_transform_factory(ax.transAxes, ax.transData)
+    lane1_y = (road["y_min"] + road["lane_divider"]) / 2
+    lane2_y = (road["lane_divider"] + road["y_max"]) / 2
+    ax.text(0.02, lane1_y, "Lane 1", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
+    ax.text(0.02, lane2_y, "Lane 2", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
+
+    (ego_dot,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8, label="Ego", zorder=10)
+    (ego_trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], alpha=0.4, linewidth=1.5, zorder=9)
+    (plan_line,) = ax.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, linewidth=1.5, label="Plan", zorder=8)
+    ego_cov_patch = patches.Ellipse(
+        (0, 0), width=0, height=0, angle=0,
+        facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
+        alpha=0.2, label="Uncertainty", zorder=7,
+    )
+    ax.add_patch(ego_cov_patch)
+    obs_rect = patches.Rectangle(
+        (obs_x0 - obs_cfg["width"] / 2, obs_y0 - obs_cfg["height"] / 2),
+        obs_cfg["width"], obs_cfg["height"],
+        facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
+        alpha=0.8, label="Other Car", zorder=9,
+    )
+    ax.add_patch(obs_rect)
+    ax.legend(loc="upper right", fontsize=8)
+    ax.set_xlim(-3, 35)
+    ax.set_ylim(road["y_min"] - 1, road["y_max"] + 1)
+
+    return fig, ax, ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect

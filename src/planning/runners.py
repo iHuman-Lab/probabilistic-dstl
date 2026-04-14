@@ -3,11 +3,9 @@ import os
 
 logger = logging.getLogger(__name__)
 
-import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib.transforms import blended_transform_factory
 
 from utils import get_device, load_config
 from planning.animation import animate_results
@@ -15,9 +13,10 @@ from planning.dynamics import DoubleIntegrator, SingleIntegrator
 from planning.environment import Environment
 from planning.planner import ProbabilisticSTLPlanner
 from planning.visualization import (
-    PALETTE,
     cov_ellipse_params,
     plot_covariance_ellipse,
+    setup_lane_change_live_plot,
+    setup_mpc_live_plot,
     visualize_lane_change,
     visualize_results,
 )
@@ -70,62 +69,9 @@ def build_initial_belief(cfg, device):
     return x0_mean, x0_cov
 
 
-def _setup_mpc_live_plot(env):
-    """Initialise the two-panel live MPC visualisation.
 
-    Returns
-    -------
-    fig, ax_map, ax_p, line_exec, line_plan, line_p
-    """
-    plt.ion()
-    fig = plt.figure(figsize=(14, 6))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.5, 1])
-    ax_map = fig.add_subplot(gs[0])
-    ax_p = fig.add_subplot(gs[1])
-
-    ax_map.set_xlim(-2, 12)
-    ax_map.set_ylim(-2, 12)
-    ax_map.set_aspect("equal")
-    ax_map.grid(True, alpha=0.3)
-    ax_map.set_title("MPC Live Execution")
-
-    if env.goal:
-        gx, gy = env.goal["x"], env.goal["y"]
-        ax_map.add_patch(patches.Rectangle(
-            (gx[0], gy[0]), gx[1] - gx[0], gy[1] - gy[0],
-            facecolor=PALETTE["goal"]["fill"], edgecolor=PALETTE["goal"]["stroke"], alpha=0.3,
-        ))
-    for obs in env.obstacles:
-        ox, oy = obs["x"], obs["y"]
-        ax_map.add_patch(patches.Rectangle(
-            (ox[0], oy[0]), ox[1] - ox[0], oy[1] - oy[0],
-            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.5,
-        ))
-    for obs in env.circle_obstacles:
-        ax_map.add_patch(patches.Circle(
-            obs["center"], obs["radius"],
-            facecolor=PALETTE["obs_static"]["fill"], edgecolor=PALETTE["obs_static"]["stroke"], alpha=0.5,
-        ))
-
-    (line_exec,) = ax_map.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", label="Executed Path")
-    (line_plan,) = ax_map.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, label="Planned Window")
-    ax_map.legend(loc="upper left")
-
-    ax_p.set_xlim(0, 100)
-    ax_p.set_ylim(0, 1.1)
-    ax_p.set_title("Window Satisfaction Prob")
-    ax_p.set_xlabel("Step")
-    ax_p.set_ylabel("P(Sat)")
-    ax_p.grid(True)
-    (line_p,) = ax_p.plot([], [], color=PALETTE["goal"]["stroke"], marker="o", markersize=3)
-
-    return fig, ax_map, ax_p, line_exec, line_plan, line_p
-
-
-def check_collision(mean_trace, env):
-    """
-    Checks for collisions between the ego vehicle trajectory and environment obstacles.
-    """
+def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
+    """Check for collisions between the ego trajectory and environment obstacles."""
     logger.info("\n" + "=" * 30)
     logger.info("SAFETY VERIFICATION")
     logger.info("=" * 30)
@@ -137,8 +83,6 @@ def check_collision(mean_trace, env):
 
     is_safe = True
     min_sep = float("inf")
-
-    r_robot = 1.0
 
     for t in range(T):
         ego_pos = traj[t].cpu().numpy()
@@ -162,7 +106,7 @@ def check_collision(mean_trace, env):
                 dist = np.linalg.norm(ego_pos[:2] - np.array([ox, oy]))
                 if dist < min_sep:
                     min_sep = dist
-                if dist < 2.25:
+                if dist < moving_obs_dist:
                     logger.info(f"[COLLISION] Moving Obstacle at Step {t}: Dist={dist:.2f}")
                     is_safe = False
 
@@ -290,7 +234,7 @@ def run_mpc(load_from=None, force_run=False):
         gx, gy = cfg["goal"]["x_range"], cfg["goal"]["y_range"]
         goal_center = torch.tensor([(gx[0] + gx[1]) / 2, (gy[0] + gy[1]) / 2], device=device)
 
-        fig, ax_map, ax_p, line_exec, line_plan, line_p = _setup_mpc_live_plot(env)
+        fig, ax_map, ax_p, line_exec, line_plan, line_p = setup_mpc_live_plot(env)
 
         all_plans = []
         p_sat_trace = []
@@ -457,48 +401,15 @@ def _run_lane_change_scenario(cfg_path):
     success_counter = 0
 
     # --- Live Visualization ---
-    plt.ion()
-    fig, ax = plt.subplots(figsize=(14, 4))
-    ax.grid(True, alpha=0.3, zorder=3)
-    ax.set_title(f"Lane Change MPC ({label}) — Live Execution")
-    ax.set_ylabel("$y$ [m]")
-    ax.set_xlabel("$x$ [m]")
-
-    ax.axhspan(road["y_min"], road["y_max"], color=PALETTE["road"]["fill"], zorder=0)
-    ax.axhspan(3.0, 5.0, color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1)
-    ax.axhline(road["y_min"], color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-", alpha=0.8, zorder=2)
-    ax.axhline(road["y_max"], color=PALETTE["lane"]["stroke"], linewidth=2.0, linestyle="-", alpha=0.8, zorder=2)
-    ax.axhline(road["lane_divider"], color=PALETTE["lane"]["stroke"], linewidth=1.2, linestyle="--", alpha=0.6, zorder=2)
-
-    _blend = blended_transform_factory(ax.transAxes, ax.transData)
-    lane1_y = (road["y_min"] + road["lane_divider"]) / 2
-    lane2_y = (road["lane_divider"] + road["y_max"]) / 2
-    ax.text(0.02, lane1_y, "Lane 1", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
-    ax.text(0.02, lane2_y, "Lane 2", transform=_blend, color=PALETTE["lane"]["stroke"], fontsize=8, va="center", ha="left")
-
-    (ego_dot,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8, label="Ego", zorder=10)
-    (ego_trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], alpha=0.4, linewidth=1.5, zorder=9)
-    (plan_line,) = ax.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, linewidth=1.5, label="Plan", zorder=8)
-    ego_cov_patch = patches.Ellipse(
-        (0, 0), width=0, height=0, angle=0,
-        facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
-        alpha=0.2, label="Uncertainty", zorder=7,
+    success_cfg = cfg["success"]
+    fig, ax, ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect = setup_lane_change_live_plot(
+        road, obs_cfg, obs_x_global[0], obs_y_global[0], success_cfg, label
     )
-    ax.add_patch(ego_cov_patch)
-    obs_rect = patches.Rectangle(
-        (obs_x_global[0] - obs_cfg["width"] / 2, obs_y_global[0] - obs_cfg["height"] / 2),
-        obs_cfg["width"], obs_cfg["height"],
-        facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
-        alpha=0.8, label="Other Car", zorder=9,
-    )
-    ax.add_patch(obs_rect)
-    ax.legend(loc="upper right", fontsize=8)
-    ax.set_xlim(-3, 35)
-    ax.set_ylim(road["y_min"] - 1, road["y_max"] + 1)
 
     # --- MPC Loop ---
-    success_cfg = cfg["success"]
-    goal_lookahead = 4.0  # x-distance ahead to place local goal window
+    goal_lookahead = planner_cfg["mpc_goal_lookahead"]
+    goal_window_width = planner_cfg["mpc_goal_window_width"]
+    lane_margin = planner_cfg["lane_boundary_margin"]
 
     for t in range(T_SIM):
         ego_pos = curr_mean.cpu().numpy()
@@ -506,11 +417,11 @@ def _run_lane_change_scenario(cfg_path):
 
         env_local = Environment(device=device)
         goal_x_lo = curr_x + goal_lookahead
-        goal_x_hi = curr_x + goal_lookahead + 60.0
+        goal_x_hi = curr_x + goal_lookahead + goal_window_width
         env_local.set_goal(x_range=[goal_x_lo, goal_x_hi], y_range=[cfg["goal"]["y_range"][0] + 0.1, cfg["goal"]["y_range"][1] - 0.1])
 
-        y_min_bound = road["y_min"] + 0.5
-        if curr_mean[1] > road["lane_divider"] - 0.5:
+        y_min_bound = road["y_min"] + lane_margin
+        if curr_mean[1] > road["lane_divider"] - lane_margin:
             y_min_bound = road["lane_divider"]
         env_local.set_bounds(x_range=[-100.0, 200.0], y_range=[y_min_bound, road["y_max"]])
 
@@ -610,7 +521,11 @@ def _run_lane_change_scenario(cfg_path):
         save_path,
     )
 
-    check_collision(full_mean_trace, env_global)
+    check_collision(
+        full_mean_trace, env_global,
+        r_robot=planner_cfg["r_robot"],
+        moving_obs_dist=planner_cfg["moving_obs_dist"],
+    )
 
     save_prefix = cfg["save_file"].replace(".pt", "")
     logger.info(f"Generating visualization for {label}...")

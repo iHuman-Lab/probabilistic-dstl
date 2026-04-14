@@ -1,0 +1,20 @@
+# Parameters for the two introductory STL examples in main.py.
+
+example1:
+  # Linear dynamical system (used to generate a synthetic signal)
+  a: 0.01
+  b: 1.0
+  g: 2.0
+  q: 2.5
+  mu: 50.0
+  P: 0.15
+  t_end: 10.0
+  n_steps: 100
+  # STL specification: □[interval_sec](x ≥ threshold)
+  threshold: 50.0
+  interval_sec: [1, 2]
+
+example2:
+  # Piecewise signal — generated internally, no extra params needed
+  threshold: 50.0
+  interval_steps: [1, 2]

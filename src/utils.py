@@ -2,6 +2,7 @@ import os
 import sys
 from contextlib import contextmanager
 
+import numpy as np
 import torch
 import yaml
 
@@ -75,3 +76,48 @@ class ColorPrint:
     @staticmethod
     def print_warn(message, end="\n"):
         sys.stderr.write("\x1b[1;33m" + message.strip() + "\x1b[0m" + end)
+
+
+def to_steps(interval_sec, t):
+    """Convert a time interval [a, b] in seconds to integer step indices.
+
+    Parameters
+    ----------
+    interval_sec : list of two numbers
+        Interval bounds in seconds. The second bound may be np.inf.
+    t : array-like
+        Time vector (uniformly spaced).
+
+    Returns
+    -------
+    [a_step, b_step] : list
+    """
+    dt = float(t[1] - t[0])
+    a = int(round(interval_sec[0] / dt))
+    b = np.inf if np.isinf(interval_sec[1]) else int(round(interval_sec[1] / dt))
+    return [a, b]
+
+
+def create_belief_trajectory(mean_trace, var_trace, confidence_level=1.0):
+    """Wrap mean/variance arrays into a BeliefTrajectory of GaussianBeliefs.
+
+    Parameters
+    ----------
+    mean_trace : array-like, shape (T,)
+    var_trace  : array-like, shape (T,)
+    confidence_level : float
+
+    Returns
+    -------
+    BeliefTrajectory
+    """
+    from models.dynamics import GaussianBelief
+    from pdstl.base import BeliefTrajectory
+
+    mean = torch.tensor(mean_trace, dtype=torch.float32).reshape(1, -1, 1)
+    var = torch.tensor(var_trace, dtype=torch.float32).reshape(1, -1, 1)
+    beliefs = [
+        GaussianBelief(mean[:, i:i+1, :], var[:, i:i+1, :], confidence_level=confidence_level)
+        for i in range(len(mean_trace))
+    ]
+    return BeliefTrajectory(beliefs)

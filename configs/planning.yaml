@@ -11,3 +11,17 @@ w_dist: 5.0       # Goal guidance heuristic weight
 w_obs: 5.0        # Obstacle repulsion heuristic weight
 w_visit: 5.0      # Visit-region heuristic weight
 loss_tol: 1.0e-4  # Loss convergence tolerance
+
+# Planner convergence internals
+obs_margin: 0.75       # Safety margin (m) added to obstacle radius in repulsion loss
+converge_patience: 50  # Consecutive iters at P≥alpha before early stopping
+min_iters: 10          # Min iters before loss-tolerance check activates
+
+# Lane-change MPC local-window parameters (shared across all lane-change scenarios)
+mpc_goal_lookahead: 4.0      # x-distance ahead (m) to start local goal window
+mpc_goal_window_width: 60.0  # Width (m) of local goal window in x
+lane_boundary_margin: 0.5    # Lateral clearance (m) from road/lane boundaries
+
+# Collision check thresholds (used by check_collision)
+r_robot: 1.0           # Robot bounding-box half-size (m) for static-obstacle check
+moving_obs_dist: 2.25  # Minimum safe separation (m) from moving obstacle centre
