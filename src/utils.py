@@ -2,7 +2,13 @@ import os
 import sys
 from contextlib import contextmanager
 
+import torch
 import yaml
+
+
+def get_device():
+    """Return CUDA device if available, else CPU."""
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def load_config(path):
@@ -12,7 +18,7 @@ def load_config(path):
     ----------
     path : str
         Path to the YAML file. Can be relative to the project root
-        (e.g. ``"configs/scenarios/single_shot.yaml"``).
+
     """
     if not os.path.isabs(path):
         # Resolve relative paths from the project root (two levels above this file)

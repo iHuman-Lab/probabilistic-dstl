@@ -22,19 +22,15 @@ import torch.nn as nn
 import torch.optim as optim
 
 from planning.dynamics import SingleIntegrator
-from planning.environment import Environment
 from planning.planner import TorchGaussianBelief
+from planning.runners import build_environment, load_scenario_config
 from pdstl.base import BeliefTrajectory
 
 
 def build_spec_and_env(T, device):
     """Builds the same spec used in run_single_shot, parameterised by T."""
-    env = Environment(device=device)
-    env.set_goal(x_range=[10.0, 12.0], y_range=[2.0, 4.0])
-    env.set_bounds(x_range=[0.0, 12.0], y_range=[0.0, 10.5])
-    env.add_visit_region(x_range=[8.0, 10.0], y_range=[7.0, 9.0])
-    env.add_obstacle(x_range=[2.0, 4.0], y_range=[2.0, 6.0])
-    env.add_obstacle(x_range=[6.0, 8.0], y_range=[2.0, 6.0])
+    cfg, _ = load_scenario_config("configs/scenarios/single_shot.yaml")
+    env = build_environment(cfg, device)
     spec = env.get_specification(T)
     return env, spec
 

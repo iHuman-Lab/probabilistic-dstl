@@ -15,7 +15,6 @@ from planning.runners import (
     run_lane_change_aggressive,
     run_mpc,
     run_single_shot,
-    run_single_shot_comparison,
 )
 from planning.visualization import PALETTE
 from utils import skip_run
@@ -167,11 +166,6 @@ with skip_run("skip", "Example 5: Lane Change") as check, check():
 # =============================================================================
 # EXAMPLE 6: Aggressive Lane Change
 # =============================================================================
-with skip_run("run", "Example 6: Aggressive Lane Change") as check, check():
+with skip_run("skip", "Example 6: Aggressive Lane Change") as check, check():
     run_lane_change_aggressive()
 
-# =============================================================================
-# EXAMPLE 7: Single Shot Comparison Table (Probabilistic vs. STLCG)
-# =============================================================================
-with skip_run("skip", "Example 7: Single Shot Comparison Table") as check, check():
-    run_single_shot_comparison(n_trials=1000, force_run=True)
