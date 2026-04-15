@@ -57,8 +57,6 @@ robot_dims: [2.0, 1.0]   # [length, width] in metres
 # --- Visualization ---
 plot_xlim: [-3, 35]   # x-axis range for lane-change plots
 
-# --- Output ---
-save_file: lane_change_normal.pt
 label: "Normal"
 
 animation:

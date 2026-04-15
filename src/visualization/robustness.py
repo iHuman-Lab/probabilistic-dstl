@@ -35,7 +35,6 @@ def plot_stl_formula_bounds(
     interval=None,
     operator_type="always",
     figsize=(10, 8),
-    save_path=None,
 ):
     time = np.asarray(time)
     T = len(time)
@@ -101,9 +100,6 @@ def plot_stl_formula_bounds(
         fig.suptitle(formula_str, fontsize=12, fontweight="bold")
 
     plt.tight_layout()
-
-    if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.show()
 
     return fig, axes
@@ -147,7 +143,6 @@ def plot_piecewise_stl(
     interval=None,
     operator_type="always",
     figsize=(10, 12),
-    save_path=None,
 ):
     time = np.asarray(time)
     T = len(time)
@@ -321,10 +316,7 @@ def plot_piecewise_stl(
     ax3.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    if save_path:
-        fig.savefig(save_path, bbox_inches="tight")
-    else:
-        fig.savefig("piecewise_combined.pdf", bbox_inches="tight")
+    plt.show()
     plt.close(fig)
 
     return fig, (ax1, ax2, ax3)

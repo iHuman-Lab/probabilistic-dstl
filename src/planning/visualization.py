@@ -92,8 +92,8 @@ def _compute_env_bounds(mean_np, env):
     return x_min, x_max, y_min, y_max
 
 
-def _plot_trajectory(mean_np, cov_np, env, save_prefix):
-    """Render the belief trajectory with environment and save to PDF."""
+def _plot_trajectory(mean_np, cov_np, env):
+    """Render the belief trajectory with environment."""
     T = mean_np.shape[0] - 1
     x_min, x_max, y_min, y_max = _compute_env_bounds(mean_np, env)
 
@@ -174,12 +174,12 @@ def _plot_trajectory(mean_np, cov_np, env, save_prefix):
         ax.legend(by_label.values(), by_label.keys(), loc="upper left",
                   ncol=1, fontsize=17, framealpha=0.95, edgecolor="#cccccc")
 
-    plt.savefig(f"{save_prefix}_traj.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close(fig)
 
 
-def _plot_controls(u_np, save_prefix):
-    """Plot x/y control inputs and save to PDF."""
+def _plot_controls(u_np):
+    """Plot x/y control inputs."""
     T = u_np.shape[0]
     time_steps = np.arange(T)
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
@@ -195,12 +195,12 @@ def _plot_controls(u_np, save_prefix):
     axes[1].tick_params(labelsize=16)
     axes[1].grid(True, alpha=0.35)
     plt.tight_layout()
-    plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close(fig)
 
 
-def _plot_metrics(history, p_sat_trace, save_prefix):
-    """Plot optimisation loss or satisfaction probability and save to PDF."""
+def _plot_metrics(history, p_sat_trace):
+    """Plot optimisation loss or satisfaction probability."""
     if history is None and p_sat_trace is None:
         return
     fig, ax = plt.subplots(figsize=(8, 3.2))
@@ -217,7 +217,7 @@ def _plot_metrics(history, p_sat_trace, save_prefix):
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15),
               ncol=2, fontsize=16, framealpha=0.95, edgecolor="#cccccc")
     fig.subplots_adjust(bottom=0.25)
-    plt.savefig(f"{save_prefix}_metrics.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close(fig)
 
 
@@ -229,14 +229,13 @@ def visualize_results(
     history=None,
     p_sat_trace=None,
     robot_dims=None,
-    save_prefix="results",
 ):
     mean_np = mean_trace.cpu().squeeze().numpy()
     cov_np  = cov_trace.cpu().squeeze().numpy()
     u_np    = u_trace.cpu().squeeze().numpy()
-    _plot_trajectory(mean_np, cov_np, env, save_prefix)
-    _plot_controls(u_np, save_prefix)
-    _plot_metrics(history, p_sat_trace, save_prefix)
+    _plot_trajectory(mean_np, cov_np, env)
+    _plot_controls(u_np)
+    _plot_metrics(history, p_sat_trace)
 
 
 def _road_backdrop(ax, env):
@@ -305,120 +304,13 @@ def visualize_lane_change(
     p_sat_trace=None,
     dt=0.2,
     robot_dims=None,
-    save_prefix="lane_change",
-    comparison_data=None,
     xlim=None,
 ):
-    """
-
-    Produces:
-      - <save_prefix>_combined.pdf : Stacked trajectory and snapshot sharing x-axis
-      - <save_prefix>_comparison.pdf : (Optional) Side-by-side comparison if comparison_data is provided
-      - <save_prefix>_ctrl.pdf     : accelerations + P(sat) on a shared time axis
-    """
     mean_np = mean_trace.cpu().squeeze().numpy()  # [T+1, ≥2]
     cov_np = cov_trace.cpu().squeeze().numpy()  # [T+1, D, D]
     u_np = u_trace.cpu().squeeze().numpy()  # [T,  2]
     T = mean_np.shape[0] - 1
     time_u = np.arange(T) * dt
-
-    # ------------------------------------------------------------------ #
-    # Comparison Plot (if requested)
-    # ------------------------------------------------------------------ #
-    if comparison_data:
-        # 1. Trajectories Comparison (Stacked)
-        fig_t, axes_t = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-        h1 = _plot_lc_trajectory(
-            axes_t[0],
-            mean_trace,
-            cov_trace,
-            env,
-            dt,
-            robot_dims,
-            title="Normal Scenario",
-            show_legend=False,
-            xlim=xlim,
-        )
-        h2 = _plot_lc_trajectory(
-            axes_t[1],
-            comparison_data["mean_trace"],
-            comparison_data["cov_trace"],
-            comparison_data["env"],
-            dt,
-            robot_dims,
-            title="Aggressive Scenario",
-            show_legend=False,
-            xlim=xlim,
-        )
-
-        # Unified Legend
-        all_h = {**h1, **h2}
-        fig_t.legend(
-            all_h.values(),
-            all_h.keys(),
-            loc="lower center",
-            ncol=min(len(all_h), 4),
-            fontsize=20,
-            bbox_to_anchor=(0.5, 0.02),
-        )
-        fig_t.subplots_adjust(hspace=0.15, bottom=0.15)
-        plt.savefig(
-            f"{save_prefix}_compare_traj.pdf", bbox_inches="tight", pad_inches=0.1
-        )
-        plt.close(fig_t)
-
-        # 2. Snapshots Comparison (Stacked)
-        fig_s, axes_s = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-        h_s1 = _plot_lc_snapshots(
-            axes_s[0],
-            mean_trace,
-            cov_trace,
-            env,
-            dt,
-            robot_dims,
-            title="Normal Scenario",
-            show_legend=False,
-            show_xlabel=False,
-            xlim=xlim,
-        )
-        h_s2 = _plot_lc_snapshots(
-            axes_s[1],
-            comparison_data["mean_trace"],
-            comparison_data["cov_trace"],
-            comparison_data["env"],
-            dt,
-            robot_dims,
-            title="Aggressive Scenario",
-            show_legend=False,
-            show_xlabel=True,
-            xlim=xlim,
-        )
-
-        # Unified Legend (Deduplicate handles from list)
-        seen_labels = set()
-        unique_handles = []
-        for h in h_s1 + h_s2:
-            l = h.get_label()
-            if l not in seen_labels:
-                seen_labels.add(l)
-                unique_handles.append(h)
-
-        fig_s.legend(
-            handles=unique_handles,
-            loc="lower center",
-            ncol=min(len(unique_handles), 4),
-            fontsize=20,
-            bbox_to_anchor=(0.5, 0.02),
-        )
-        fig_s.subplots_adjust(hspace=0.15, bottom=0.15)
-        plt.savefig(
-            f"{save_prefix}_compare_snaps.pdf", bbox_inches="tight", pad_inches=0.1
-        )
-        plt.close(fig_s)
-
-        print(
-            f"Comparison plots saved to {save_prefix}_compare_traj.pdf and {save_prefix}_compare_snaps.pdf"
-        )
 
     # ------------------------------------------------------------------ #
     # Combined Figure: Trajectory (Top) and Snapshot (Bottom)
@@ -466,7 +358,7 @@ def visualize_lane_change(
     # Better to use subplots_adjust after tight_layout if we want custom bottom margin.
     plt.subplots_adjust(bottom=0.15)
 
-    plt.savefig(f"{save_prefix}_combined.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close(fig)
 
     # ------------------------------------------------------------------ #
@@ -517,7 +409,7 @@ def visualize_lane_change(
 
     axes[-1].set_xlabel("Time [s]", fontsize=16)
     plt.tight_layout()
-    plt.savefig(f"{save_prefix}_ctrl.pdf", bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close(fig3)
 
 

@@ -1,13 +1,11 @@
-import logging
 import os
-
-logger = logging.getLogger(__name__)
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
 from utils import get_device, load_config
+from planning import log_utils
 from planning.animation import animate_results
 from planning.dynamics import DoubleIntegrator, SingleIntegrator
 from planning.environment import Environment
@@ -72,10 +70,6 @@ def build_initial_belief(cfg, device):
 
 def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
     """Check for collisions between the ego trajectory and environment obstacles."""
-    logger.info("\n" + "=" * 30)
-    logger.info("SAFETY VERIFICATION")
-    logger.info("=" * 30)
-
     traj = mean_trace.squeeze()  # [T, 2]
     if traj.ndim == 1:
         traj = traj.unsqueeze(0)
@@ -94,7 +88,7 @@ def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
             if (x_min - r_robot <= ego_pos[0] <= x_max + r_robot) and (
                 y_min - r_robot <= ego_pos[1] <= y_max + r_robot
             ):
-                logger.info(f"[COLLISION] Static Obstacle at Step {t}: Ego={ego_pos}")
+                log_utils._log.info(f"[COLLISION] Static obstacle at step {t}: Ego={ego_pos}")
                 is_safe = False
 
         # 2. Moving Obstacles
@@ -107,22 +101,15 @@ def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
                 if dist < min_sep:
                     min_sep = dist
                 if dist < moving_obs_dist:
-                    logger.info(f"[COLLISION] Moving Obstacle at Step {t}: Dist={dist:.2f}")
+                    log_utils._log.info(f"[COLLISION] Moving obstacle at step {t}: dist={dist:.2f}")
                     is_safe = False
 
-    if is_safe:
-        if min_sep < float("inf"):
-            logger.info(f"Result: SAFE. (Min Separation from Moving Obs: {min_sep:.2f})")
-        else:
-            logger.info("Result: SAFE.")
-    else:
-        logger.info("Result: UNSAFE (Collisions Detected)")
-    logger.info("=" * 30 + "\n")
+    log_utils.log_safety(is_safe, min_sep)
 
 
 def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
     device = get_device()
-    logger.info(f"Using device: {device}")
+    log_utils.log_device(device)
 
     cfg, planner_cfg = load_scenario_config("configs/scenarios/single_shot.yaml")
 
@@ -135,14 +122,14 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
     env = build_environment(cfg, device)
 
     if not force_run and load_from and os.path.exists(load_from):
-        logger.info(f"Loading results from {load_from}...")
+        log_utils.log_load(load_from)
         data = torch.load(load_from, map_location=device, weights_only=False)
         mean_trace = data["mean_trace"]
         cov_trace = data["cov_trace"]
         u_trace = data["u_trace"]
         history = data["history"]
         best_p = data.get("best_p", 0.0)
-        logger.info(f"Loaded. Final Satisfaction Probability: {best_p:.4f}")
+        log_utils._log.info(f"Loaded. Final P(Sat): {best_p:.4f}")
     else:
         # --- Setup Dynamics ---
         dynamics = SingleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
@@ -153,15 +140,14 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
         # --- Initial Condition ---
         x0_mean, x0_cov = build_initial_belief(cfg, device)
 
-        logger.info("Initializing Probabilistic STL Motion Planning...")
+        log_utils._log.info("Starting single-shot optimisation...")
 
         # Run optimization
         mean_trace, cov_trace, u_trace, best_p, history = planner.solve(
             x0_mean, x0_cov, render=True, init_guess=None
         )
 
-        logger.info("Optimization Complete.")
-        logger.info(f"Final Satisfaction Probability: {best_p:.4f}")
+        log_utils._log.info(f"Done. Final P(Sat): {best_p:.4f}")
 
         if load_from:
             torch.save(
@@ -174,12 +160,10 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
                 },
                 load_from,
             )
-            logger.info(f"Results saved to {load_from}")
+            log_utils.log_save(load_from)
 
     # --- Visualize ---
-    visualize_results(
-        mean_trace, cov_trace, u_trace, env, history, save_prefix="single_shot"
-    )
+    visualize_results(mean_trace, cov_trace, u_trace, env, history)
 
     anim = cfg["animation"]
     animate_results(
@@ -195,7 +179,7 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
 
 def run_mpc(load_from=None, force_run=False):
     device = get_device()
-    logger.info(f"Using device: {device}")
+    log_utils.log_device(device)
 
     cfg, planner_cfg = load_scenario_config("configs/scenarios/mpc.yaml")
 
@@ -209,7 +193,7 @@ def run_mpc(load_from=None, force_run=False):
     env = build_environment(cfg, device)
 
     if not force_run and os.path.exists(load_from):
-        logger.info(f"Loading MPC results from {load_from}...")
+        log_utils.log_load(load_from)
         data = torch.load(load_from, map_location=device, weights_only=False)
         full_mean_trace = data["mean_trace"]
         full_cov_trace = data["cov_trace"]
@@ -224,7 +208,7 @@ def run_mpc(load_from=None, force_run=False):
         # --- Initial Condition ---
         x0_mean, x0_cov = build_initial_belief(cfg, device)
 
-        logger.info(f"Starting MPC Execution (Horizon={H})...")
+        log_utils._log.info(f"Starting MPC execution (horizon={H})...")
 
         real_mean_trace = [x0_mean]
         real_cov_trace = [x0_cov]
@@ -247,7 +231,7 @@ def run_mpc(load_from=None, force_run=False):
         while step < MAX_STEPS:
             dist_to_goal = torch.norm(curr_mean - goal_center)
             if dist_to_goal < planner_cfg["goal_reached_dist"]:
-                logger.info(f"Goal Reached at step {step}!")
+                log_utils.log_goal_reached(step)
                 break
 
             # Setup Planner for Sliding Window
@@ -301,9 +285,7 @@ def run_mpc(load_from=None, force_run=False):
             curr_mean = next_mean
             curr_cov = next_cov
 
-            logger.info(
-                f"Step {step:03d} | Pos: [{curr_mean[0]:.2f}, {curr_mean[1]:.2f}] | Goal Dist: {dist_to_goal:.2f} | Window P(Sat): {p_val:.4f}"
-            )
+            log_utils.log_mpc_step(step, curr_mean.cpu().numpy(), dist_to_goal.item(), p_val)
             step += 1
 
         plt.ioff()
@@ -325,18 +307,11 @@ def run_mpc(load_from=None, force_run=False):
             },
             load_from,
         )
-        logger.info(f"Results saved to {load_from}")
+        log_utils.log_save(load_from)
 
     # --- Visualize ---
-    visualize_results(
-        full_mean_trace,
-        full_cov_trace,
-        full_u_trace,
-        env,
-        history=loss_trace,
-        p_sat_trace=p_sat_trace,
-        save_prefix="mpc",
-    )
+    visualize_results(full_mean_trace, full_cov_trace, full_u_trace, env,
+                      history=loss_trace, p_sat_trace=p_sat_trace)
 
     animate_results(
         full_mean_trace,
@@ -358,7 +333,7 @@ def _run_lane_change_scenario(cfg_path):
     road geometry, success thresholds) are read from the YAML file at cfg_path.
     """
     device = get_device()
-    logger.info(f"Using device: {device}")
+    log_utils.log_device(device)
 
     cfg, planner_cfg = load_scenario_config(cfg_path)
     label = cfg.get("label", "")
@@ -367,7 +342,7 @@ def _run_lane_change_scenario(cfg_path):
     T_SIM = cfg["T_SIM"]
     dt = cfg["dt"]
 
-    logger.info(f"\n=== Running {label} Scenario ===")
+    log_utils.log_scenario_start(label)
 
     dynamics = DoubleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
 
@@ -478,11 +453,7 @@ def _run_lane_change_scenario(cfg_path):
         dist = np.linalg.norm(ego_pos[:2] - obs_pos)
 
         if t % 5 == 0:
-            logger.info(
-                f"Step {t:03d} | Ego: [{ego_pos[0]:.2f}, {ego_pos[1]:.2f}]"
-                f" vx={ego_pos[2]:.2f} vy={ego_pos[3]:.2f} | "
-                f"Obs x={obs_pos[0]:.2f} | Dist: {dist:.2f} | P(φ)={p_val:.3f}"
-            )
+            log_utils.log_lane_step(t, ego_pos, obs_pos[0], dist, p_val)
 
         ego_x, ego_y = ego_pos[0], ego_pos[1]
         ego_dot.set_data([ego_x], [ego_y])
@@ -510,7 +481,7 @@ def _run_lane_change_scenario(cfg_path):
             success_counter = 0
 
         if success_counter >= success_cfg["consecutive_steps"]:
-            logger.info(f"Lane change ({label}) completed at step {t}!")
+            log_utils.log_lane_change_done(label, t)
             break
 
     plt.ioff()
@@ -525,34 +496,23 @@ def _run_lane_change_scenario(cfg_path):
     full_cov_trace = torch.stack(real_cov_trace).unsqueeze(0)
     full_u_trace = torch.stack(real_u_trace).unsqueeze(0)
 
-    save_path = os.path.join(RESULTS_DIR, cfg["save_file"])
-    torch.save(
-        {"mean_trace": full_mean_trace, "cov_trace": full_cov_trace, "u_trace": full_u_trace, "env": env_global},
-        save_path,
-    )
-
     check_collision(
         full_mean_trace, env_global,
         r_robot=planner_cfg["r_robot"],
         moving_obs_dist=planner_cfg["moving_obs_dist"],
     )
 
-    save_prefix = cfg["save_file"].replace(".pt", "")
-    logger.info(f"Generating visualization for {label}...")
     visualize_lane_change(
         full_mean_trace, full_cov_trace, full_u_trace, env_global,
-        p_sat_trace=p_sat_trace, dt=dt, robot_dims=robot_dims,
-        save_prefix=save_prefix, comparison_data=None, xlim=cfg["plot_xlim"],
+        p_sat_trace=p_sat_trace, dt=dt, robot_dims=robot_dims, xlim=cfg["plot_xlim"],
     )
 
     animate_results(
         full_mean_trace, full_cov_trace, env_global,
-        filename=f"{save_prefix}.gif",
+        filename=f"lane_change_{label.lower()}.gif",
         plan_traces=all_plans, step=cfg["animation"]["step"],
         robot_dims=robot_dims, title=f"Lane Change: {label}", bounds=None,
     )
-
-    return full_mean_trace, full_cov_trace, full_u_trace, env_global, p_sat_trace, dt
 
 
 def run_lane_change():
@@ -560,25 +520,5 @@ def run_lane_change():
 
 
 def run_lane_change_aggressive():
-    normal_cfg_path = "configs/scenarios/lane_change.yaml"
-    agg_cfg_path = "configs/scenarios/lane_change_aggressive.yaml"
-
-    # Run aggressive scenario
-    agg_mean, agg_cov, agg_u, agg_env, _, dt = _run_lane_change_scenario(agg_cfg_path)
-
-    # Generate Normal vs Aggressive comparison if normal results exist
-    normal_cfg = load_config(normal_cfg_path)
-    normal_res_path = os.path.join(RESULTS_DIR, normal_cfg["save_file"])
-    if os.path.exists(normal_res_path):
-        device = agg_mean.device
-        logger.info("Generating Normal vs Aggressive comparison snapshots...")
-        normal_data = torch.load(normal_res_path, map_location=device, weights_only=False)
-        visualize_lane_change(
-            normal_data["mean_trace"], normal_data["cov_trace"], normal_data["u_trace"],
-            normal_data["env"], p_sat_trace=None, dt=dt,
-            robot_dims=tuple(normal_cfg["robot_dims"]),
-            save_prefix="lane_change_compare",
-            comparison_data={"mean_trace": agg_mean, "cov_trace": agg_cov, "env": agg_env},
-            xlim=normal_cfg["plot_xlim"],
-        )
+    _run_lane_change_scenario("configs/scenarios/lane_change_aggressive.yaml")
 

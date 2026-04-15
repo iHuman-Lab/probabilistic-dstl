@@ -58,8 +58,6 @@ robot_dims: [2.0, 1.0]
 # --- Visualization ---
 plot_xlim: [-3, 35]
 
-# --- Output ---
-save_file: lane_change_aggressive.pt
 label: "Aggressive"
 
 animation:
