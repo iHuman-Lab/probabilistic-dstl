@@ -19,6 +19,7 @@ road:
   y_min: -2.0
   y_max: 6.0
   lane_divider: 2.0
+  marking_x_range: [-5, 120]
 
 # --- Goal (identical to normal) ---
 goal:
@@ -51,6 +52,15 @@ planner:
   w_visit: 0.0
   loss_tol: 1.0e-5
 
+# --- Robot dimensions ---
+robot_dims: [2.0, 1.0]
+
+# --- Visualization ---
+plot_xlim: [-3, 35]
+
 # --- Output ---
 save_file: lane_change_aggressive.pt
 label: "Aggressive"
+
+animation:
+  step: 4

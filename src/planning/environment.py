@@ -171,7 +171,7 @@ class Environment:
         if not specs:
             raise ValueError("No constraints defined in environment.")
 
-        # 4. Combined Specification
+        # 5. Combined Specification
         combined_spec = specs[0]
         for i in range(1, len(specs)):
             combined_spec = And(combined_spec, specs[i])
@@ -206,10 +206,7 @@ class RectangularGoalPredicate(STL_Formula):
         self.y_min, self.y_max = region["y"]
 
     def robustness_trace(self, belief_trajectory, **kwargs):
-        # We process the entire trajectory at once
-
-        # 1. Extract Means and Variances
-
+        # **kwargs forwarded by the STL_Formula interface (see pdstl/operators.py)
         mu, var = extract_trajectory_stats(belief_trajectory)
 
         mu_x, mu_y = mu[..., 0], mu[..., 1]

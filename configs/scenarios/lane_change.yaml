@@ -15,9 +15,10 @@ x0_cov_scale: 0.01
 
 # --- Road geometry ---
 road:
-  y_min: -2.0    # Bottom solid lane marking
-  y_max: 6.0     # Top solid lane marking
-  lane_divider: 2.0   # Dashed centre line (Lane 1 / Lane 2 boundary)
+  y_min: -2.0          # Bottom solid lane marking
+  y_max: 6.0           # Top solid lane marking
+  lane_divider: 2.0    # Dashed centre line (Lane 1 / Lane 2 boundary)
+  marking_x_range: [-5, 120]   # x-extent of painted lane markings
 
 # --- Goal: reach Lane 2 and stay ---
 goal:
@@ -50,6 +51,15 @@ planner:
   w_visit: 0.0
   loss_tol: 1.0e-5
 
+# --- Robot dimensions ---
+robot_dims: [2.0, 1.0]   # [length, width] in metres
+
+# --- Visualization ---
+plot_xlim: [-3, 35]   # x-axis range for lane-change plots
+
 # --- Output ---
 save_file: lane_change_normal.pt
 label: "Normal"
+
+animation:
+  step: 4   # Frame decimation for .gif output

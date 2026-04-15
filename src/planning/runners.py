@@ -111,7 +111,10 @@ def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
                     is_safe = False
 
     if is_safe:
-        logger.info(f"Result: SAFE. (Min Separation from Moving Obs: {min_sep:.2f})")
+        if min_sep < float("inf"):
+            logger.info(f"Result: SAFE. (Min Separation from Moving Obs: {min_sep:.2f})")
+        else:
+            logger.info("Result: SAFE.")
     else:
         logger.info("Result: UNSAFE (Collisions Detected)")
     logger.info("=" * 30 + "\n")
@@ -243,7 +246,7 @@ def run_mpc(load_from=None, force_run=False):
         step = 0
         while step < MAX_STEPS:
             dist_to_goal = torch.norm(curr_mean - goal_center)
-            if dist_to_goal < 0.5:
+            if dist_to_goal < planner_cfg["goal_reached_dist"]:
                 logger.info(f"Goal Reached at step {step}!")
                 break
 
@@ -253,7 +256,7 @@ def run_mpc(load_from=None, force_run=False):
             )
 
             # Solve Optimization
-            p_mean, p_cov, p_u, p_val, history = mpc_planner.solve(
+            p_mean, _, p_u, p_val, history = mpc_planner.solve(
                 curr_mean, curr_cov, render=False, verbose=False
             )
 
@@ -341,8 +344,8 @@ def run_mpc(load_from=None, force_run=False):
         env,
         filename="mpc_animation.gif",
         plan_traces=all_plans,
-        step=5,
-        title="MPC Receding Horizon",
+        step=cfg["animation"]["step"],
+        title=cfg["animation"]["title"],
         bounds=([cfg["bounds"]["x_range"][0], cfg["bounds"]["x_range"][1]],
                 [cfg["bounds"]["y_range"][0], cfg["bounds"]["y_range"][1]]),
     )
@@ -371,9 +374,10 @@ def _run_lane_change_scenario(cfg_path):
     # --- Global environment (road + full obstacle trajectory for collision check) ---
     road = cfg["road"]
     env_global = Environment(device=device)
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=cfg["road"]["lane_divider"], style="dashed")
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=cfg["road"]["y_min"], style="solid")
-    env_global.add_lane_marking(x_range=[-5, 120], y_pos=cfg["road"]["y_max"], style="solid")
+    marking_x = cfg["road"]["marking_x_range"]
+    env_global.add_lane_marking(x_range=marking_x, y_pos=road["lane_divider"], style="dashed")
+    env_global.add_lane_marking(x_range=marking_x, y_pos=road["y_min"], style="solid")
+    env_global.add_lane_marking(x_range=marking_x, y_pos=road["y_max"], style="solid")
     env_global.set_goal(**cfg["goal"])
 
     obs_cfg = cfg["obstacle"]
@@ -407,9 +411,12 @@ def _run_lane_change_scenario(cfg_path):
     )
 
     # --- MPC Loop ---
+    robot_dims = tuple(cfg["robot_dims"])
     goal_lookahead = planner_cfg["mpc_goal_lookahead"]
     goal_window_width = planner_cfg["mpc_goal_window_width"]
     lane_margin = planner_cfg["lane_boundary_margin"]
+    goal_y_inset = planner_cfg["goal_y_inset"]
+    local_x_range = planner_cfg["mpc_local_x_range"]
 
     for t in range(T_SIM):
         ego_pos = curr_mean.cpu().numpy()
@@ -418,12 +425,15 @@ def _run_lane_change_scenario(cfg_path):
         env_local = Environment(device=device)
         goal_x_lo = curr_x + goal_lookahead
         goal_x_hi = curr_x + goal_lookahead + goal_window_width
-        env_local.set_goal(x_range=[goal_x_lo, goal_x_hi], y_range=[cfg["goal"]["y_range"][0] + 0.1, cfg["goal"]["y_range"][1] - 0.1])
+        env_local.set_goal(
+            x_range=[goal_x_lo, goal_x_hi],
+            y_range=[cfg["goal"]["y_range"][0] + goal_y_inset, cfg["goal"]["y_range"][1] - goal_y_inset],
+        )
 
         y_min_bound = road["y_min"] + lane_margin
         if curr_mean[1] > road["lane_divider"] - lane_margin:
             y_min_bound = road["lane_divider"]
-        env_local.set_bounds(x_range=[-100.0, 200.0], y_range=[y_min_bound, road["y_max"]])
+        env_local.set_bounds(x_range=local_x_range, y_range=[y_min_bound, road["y_max"]])
 
         idx_end = t + H + 1
         if idx_end <= len(obs_x_global):
@@ -440,7 +450,7 @@ def _run_lane_change_scenario(cfg_path):
             init_guess = torch.cat([prev_u_sol[1:], prev_u_sol[-1:]], dim=0)
 
         planner = ProbabilisticSTLPlanner(dynamics, env_local, T=H, config=planner_cfg)
-        p_mean, p_cov, p_u, p_val, history = planner.solve(
+        p_mean, _, p_u, p_val, history = planner.solve(
             curr_mean, curr_cov, render=False, verbose=False, init_guess=init_guess
         )
 
@@ -531,15 +541,15 @@ def _run_lane_change_scenario(cfg_path):
     logger.info(f"Generating visualization for {label}...")
     visualize_lane_change(
         full_mean_trace, full_cov_trace, full_u_trace, env_global,
-        p_sat_trace=p_sat_trace, dt=dt, robot_dims=(2.0, 1.0),
-        save_prefix=save_prefix, comparison_data=None, xlim=[-3, 35],
+        p_sat_trace=p_sat_trace, dt=dt, robot_dims=robot_dims,
+        save_prefix=save_prefix, comparison_data=None, xlim=cfg["plot_xlim"],
     )
 
     animate_results(
         full_mean_trace, full_cov_trace, env_global,
         filename=f"{save_prefix}.gif",
-        plan_traces=all_plans, step=4, robot_dims=(2.0, 1.0),
-        title=f"Lane Change: {label}", bounds=None,
+        plan_traces=all_plans, step=cfg["animation"]["step"],
+        robot_dims=robot_dims, title=f"Lane Change: {label}", bounds=None,
     )
 
     return full_mean_trace, full_cov_trace, full_u_trace, env_global, p_sat_trace, dt
@@ -565,9 +575,10 @@ def run_lane_change_aggressive():
         normal_data = torch.load(normal_res_path, map_location=device, weights_only=False)
         visualize_lane_change(
             normal_data["mean_trace"], normal_data["cov_trace"], normal_data["u_trace"],
-            normal_data["env"], p_sat_trace=None, dt=dt, robot_dims=(2.0, 1.0),
+            normal_data["env"], p_sat_trace=None, dt=dt,
+            robot_dims=tuple(normal_cfg["robot_dims"]),
             save_prefix="lane_change_compare",
             comparison_data={"mean_trace": agg_mean, "cov_trace": agg_cov, "env": agg_env},
-            xlim=[-3, 35],
+            xlim=normal_cfg["plot_xlim"],
         )
 

@@ -25,3 +25,8 @@ lane_boundary_margin: 0.5    # Lateral clearance (m) from road/lane boundaries
 # Collision check thresholds (used by check_collision)
 r_robot: 1.0           # Robot bounding-box half-size (m) for static-obstacle check
 moving_obs_dist: 2.25  # Minimum safe separation (m) from moving obstacle centre
+
+# MPC goal / bounds parameters
+goal_reached_dist: 0.5        # Distance (m) to declare goal reached in MPC loop
+goal_y_inset: 0.1             # Shrink local goal y-range by this on each side (m)
+mpc_local_x_range: [-100.0, 200.0]  # x-range for the local MPC planning window

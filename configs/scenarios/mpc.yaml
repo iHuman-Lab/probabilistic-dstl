@@ -47,3 +47,7 @@ planner:
 
 # --- Output ---
 save_file: mpc.pt
+
+animation:
+  step: 5        # Frame decimation for .gif output
+  title: "MPC Receding Horizon"
