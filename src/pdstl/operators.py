@@ -99,7 +99,7 @@ class GreaterThan(STL_Formula):
 
             # UPPER BOUND: Optimistic assumption
 
-            upper_bound = belief.upper_bound()  # μ + k*σ
+            upper_bound = belief.upper_bound() 
             residual_upper = upper_bound - self.threshold
             prob_upper = belief.probability_of(residual_upper)
 

@@ -9,11 +9,6 @@ using the same RNN dynamic programming logic as stlcg, adapted to:
 
 Accessing output[:, 0, 0] gives robustness at t=0, matching stl_trace[0, 0, 0]
 used in the probabilistic planner.
-
-Predicates use signed distance:
-  - Positive = formula satisfied
-  - Negative = formula violated
-  - Magnitude = distance to satisfaction/violation boundary
 """
 
 import numpy as np
@@ -361,7 +356,7 @@ def det_get_specification(env, T, t_goal_start=0, t_constraints_start=1):
     """
     specs = []
 
-    # 1. Goal (liveness)
+    # 1. Goal 
     if env.goal:
         goal_pred = DetRectangularGoalPredicate(env.goal)
         specs.append(DetEventually(goal_pred, interval=[t_goal_start, T]))
