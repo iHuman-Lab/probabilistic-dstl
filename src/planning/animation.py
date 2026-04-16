@@ -171,8 +171,10 @@ def animate_results(
         time_text.set_text("")
         
         actors = [trail, ellipse, time_text, plan_line]
-        if robot_dot: actors.append(robot_dot)
-        if robot_dims: actors.append(robot_rect)
+        if robot_dot:
+            actors.append(robot_dot)
+        if robot_dims:
+            actors.append(robot_rect)
         actors.extend([p[0] for p in moving_patches])
         return actors
 
@@ -231,8 +233,10 @@ def animate_results(
             rect.set_xy((cx - obs["width"]/2, cy - obs["height"]/2))
 
         actors = [trail, ellipse, time_text, plan_line]
-        if robot_dot: actors.append(robot_dot)
-        if robot_dims: actors.append(robot_rect)
+        if robot_dot:
+            actors.append(robot_dot)
+        if robot_dims:
+            actors.append(robot_rect)
         actors.extend([p[0] for p in moving_patches])
         return actors
 

@@ -73,22 +73,30 @@ def _compute_env_bounds(mean_np, env):
     x_min, x_max = np.min(mean_np[:, 0]), np.max(mean_np[:, 0])
     y_min, y_max = np.min(mean_np[:, 1]), np.max(mean_np[:, 1])
     for lane in env.lane_markings:
-        x_min = min(x_min, min(lane["x"])); x_max = max(x_max, max(lane["x"]))
-        y_min = min(y_min, lane["y"]);      y_max = max(y_max, lane["y"])
+        x_min = min(x_min, min(lane["x"]))
+        x_max = max(x_max, max(lane["x"]))
+        y_min = min(y_min, lane["y"])
+        y_max = max(y_max, lane["y"])
     if env.goal:
-        x_min = min(x_min, env.goal["x"][0]); x_max = max(x_max, env.goal["x"][1])
-        y_min = min(y_min, env.goal["y"][0]); y_max = max(y_max, env.goal["y"][1])
+        x_min = min(x_min, env.goal["x"][0])
+        x_max = max(x_max, env.goal["x"][1])
+        y_min = min(y_min, env.goal["y"][0])
+        y_max = max(y_max, env.goal["y"][1])
     for obs in env.obstacles:
-        x_min = min(x_min, obs["x"][0]); x_max = max(x_max, obs["x"][1])
-        y_min = min(y_min, obs["y"][0]); y_max = max(y_max, obs["y"][1])
+        x_min = min(x_min, obs["x"][0])
+        x_max = max(x_max, obs["x"][1])
+        y_min = min(y_min, obs["y"][0])
+        y_max = max(y_max, obs["y"][1])
     for obs in env.circle_obstacles:
         x_min = min(x_min, obs["center"][0] - obs["radius"])
         x_max = max(x_max, obs["center"][0] + obs["radius"])
         y_min = min(y_min, obs["center"][1] - obs["radius"])
         y_max = max(y_max, obs["center"][1] + obs["radius"])
     for region in env.visit_regions:
-        x_min = min(x_min, region["x"][0]); x_max = max(x_max, region["x"][1])
-        y_min = min(y_min, region["y"][0]); y_max = max(y_max, region["y"][1])
+        x_min = min(x_min, region["x"][0])
+        x_max = max(x_max, region["x"][1])
+        y_min = min(y_min, region["y"][0])
+        y_max = max(y_max, region["y"][1])
     return x_min, x_max, y_min, y_max
 
 
@@ -307,7 +315,6 @@ def visualize_lane_change(
     xlim=None,
 ):
     mean_np = mean_trace.cpu().squeeze().numpy()  # [T+1, ≥2]
-    cov_np = cov_trace.cpu().squeeze().numpy()  # [T+1, D, D]
     u_np = u_trace.cpu().squeeze().numpy()  # [T,  2]
     T = mean_np.shape[0] - 1
     time_u = np.arange(T) * dt

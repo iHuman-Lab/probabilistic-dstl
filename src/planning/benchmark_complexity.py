@@ -9,7 +9,6 @@ Run from the src/ directory:
 """
 
 import os
-import sys
 import time
 
 import matplotlib
