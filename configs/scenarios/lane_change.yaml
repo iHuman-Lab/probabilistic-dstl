@@ -59,5 +59,9 @@ plot_xlim: [-3, 35]   # x-axis range for lane-change plots
 
 label: "Normal"
 
+live_plot_pause: 0.001   # Seconds to pause between live plot updates
+
 animation:
-  step: 4   # Frame decimation for .gif output
+  filename: lane_change_normal.gif
+  step: 4
+  title: "Lane Change: Normal"

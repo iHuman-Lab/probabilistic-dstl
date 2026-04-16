@@ -67,6 +67,32 @@ def build_initial_belief(cfg, device):
     return x0_mean, x0_cov
 
 
+def build_dynamics(cfg, device):
+    """Instantiate dynamics model from the 'dynamics' key in the scenario config."""
+    kind = cfg.get("dynamics", "single_integrator")
+    if kind == "double_integrator":
+        return DoubleIntegrator(dt=cfg["dt"], u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+    return SingleIntegrator(dt=cfg["dt"], u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+
+
+def _step_with_noise(dynamics, curr_mean, curr_cov, u):
+    """Step belief forward one timestep and add process noise sample."""
+    pred_mean, next_cov = dynamics.step(curr_mean, curr_cov, u)
+    noise = torch.distributions.MultivariateNormal(
+        torch.zeros_like(pred_mean), dynamics.Q
+    ).sample()
+    return pred_mean + noise, next_cov
+
+
+def _stack_traces(mean_list, cov_list, u_list):
+    """Stack trajectory lists into [1, T, D] tensors."""
+    return (
+        torch.stack(mean_list).unsqueeze(0),
+        torch.stack(cov_list).unsqueeze(0),
+        torch.stack(u_list).unsqueeze(0),
+    )
+
+
 
 def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
     """Check for collisions between the ego trajectory and environment obstacles."""
@@ -114,7 +140,6 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
     cfg, planner_cfg = load_scenario_config("configs/scenarios/single_shot.yaml")
 
     T = cfg["T"]
-    dt = cfg["dt"]
 
     if load_from is None:
         load_from = os.path.join(RESULTS_DIR, cfg["save_file"])
@@ -131,9 +156,7 @@ def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
         best_p = data.get("best_p", 0.0)
         log_utils._log.info(f"Loaded. Final P(Sat): {best_p:.4f}")
     else:
-        # --- Setup Dynamics ---
-        dynamics = SingleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
-
+        dynamics = build_dynamics(cfg, device)
         planner_cfg["max_iters"] = max_iterations
         planner = ProbabilisticSTLPlanner(dynamics, env, T, config=planner_cfg)
 
@@ -185,7 +208,6 @@ def run_mpc(load_from=None, force_run=False):
 
     H = cfg["H"]
     MAX_STEPS = cfg["MAX_STEPS"]
-    dt = cfg["dt"]
 
     if load_from is None:
         load_from = os.path.join(RESULTS_DIR, cfg["save_file"])
@@ -202,8 +224,7 @@ def run_mpc(load_from=None, force_run=False):
         p_sat_trace = data["p_sat_trace"]
         all_plans = data["all_plans"]
     else:
-        # --- Setup Dynamics ---
-        dynamics = SingleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+        dynamics = build_dynamics(cfg, device)
 
         # --- Initial Condition ---
         x0_mean, x0_cov = build_initial_belief(cfg, device)
@@ -263,21 +284,11 @@ def run_mpc(load_from=None, force_run=False):
             if step > ax_p.get_xlim()[1]:
                 ax_p.set_xlim(0, step + 50)
 
-            plt.pause(0.01)  # Pause to render
+            plt.pause(cfg.get("live_plot_pause", 0.01))
 
-            # Extract First Control Action (Receding Horizon)
-            u_curr = p_u[0]  # [2]
+            u_curr = p_u[0]
+            next_mean, next_cov = _step_with_noise(dynamics, curr_mean, curr_cov, u_curr)
 
-            # Propagate Belief
-            pred_mean, next_cov = dynamics.step(curr_mean, curr_cov, u_curr)
-
-            # Simulate Reality (Sample from Process Noise)
-            noise = torch.distributions.MultivariateNormal(
-                torch.zeros_like(pred_mean), dynamics.Q
-            ).sample()
-            next_mean = pred_mean + noise
-
-            # Store and Update
             real_mean_trace.append(next_mean)
             real_cov_trace.append(next_cov)
             real_u_trace.append(u_curr)
@@ -291,10 +302,9 @@ def run_mpc(load_from=None, force_run=False):
         plt.ioff()
         plt.close(fig)
 
-        # Stack results for visualization
-        full_mean_trace = torch.stack(real_mean_trace).unsqueeze(0)  # [1, T, 2]
-        full_cov_trace = torch.stack(real_cov_trace).unsqueeze(0)  # [1, T, 2, 2]
-        full_u_trace = torch.stack(real_u_trace).unsqueeze(0)  # [1, T-1, 2]
+        full_mean_trace, full_cov_trace, full_u_trace = _stack_traces(
+            real_mean_trace, real_cov_trace, real_u_trace
+        )
 
         torch.save(
             {
@@ -313,16 +323,11 @@ def run_mpc(load_from=None, force_run=False):
     visualize_results(full_mean_trace, full_cov_trace, full_u_trace, env,
                       history=loss_trace, p_sat_trace=p_sat_trace)
 
+    anim = cfg["animation"]
     animate_results(
-        full_mean_trace,
-        full_cov_trace,
-        env,
-        filename="mpc_animation.gif",
-        plan_traces=all_plans,
-        step=cfg["animation"]["step"],
-        title=cfg["animation"]["title"],
-        bounds=([cfg["bounds"]["x_range"][0], cfg["bounds"]["x_range"][1]],
-                [cfg["bounds"]["y_range"][0], cfg["bounds"]["y_range"][1]]),
+        full_mean_trace, full_cov_trace, env,
+        filename=anim["filename"], plan_traces=all_plans,
+        step=anim["step"], title=anim["title"], bounds=anim.get("bounds"),
     )
 
 
@@ -344,7 +349,7 @@ def _run_lane_change_scenario(cfg_path):
 
     log_utils.log_scenario_start(label)
 
-    dynamics = DoubleIntegrator(dt=dt, u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+    dynamics = build_dynamics(cfg, device)
 
     # --- Global environment (road + full obstacle trajectory for collision check) ---
     road = cfg["road"]
@@ -382,7 +387,8 @@ def _run_lane_change_scenario(cfg_path):
     # --- Live Visualization ---
     success_cfg = cfg["success"]
     fig, ax, ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect = setup_lane_change_live_plot(
-        road, obs_cfg, obs_x_global[0], obs_y_global[0], success_cfg, label
+        road, obs_cfg, obs_x_global[0], obs_y_global[0], success_cfg, label,
+        xlim=cfg["plot_xlim"],
     )
 
     # --- MPC Loop ---
@@ -435,11 +441,7 @@ def _run_lane_change_scenario(cfg_path):
         p_sat_trace.append(p_val)
 
         u_curr = p_u[0]
-        pred_mean, next_cov = dynamics.step(curr_mean, curr_cov, u_curr)
-        noise = torch.distributions.MultivariateNormal(
-            torch.zeros_like(pred_mean), dynamics.Q
-        ).sample()
-        next_mean = pred_mean + noise
+        next_mean, next_cov = _step_with_noise(dynamics, curr_mean, curr_cov, u_curr)
 
         real_mean_trace.append(next_mean)
         real_cov_trace.append(next_cov)
@@ -473,7 +475,7 @@ def _run_lane_change_scenario(cfg_path):
         obs_rect.set_xy((obs_pos[0] - obs_cfg["width"] / 2, obs_pos[1] - obs_cfg["height"] / 2))
 
         plt.draw()
-        plt.pause(0.001)
+        plt.pause(cfg.get("live_plot_pause", 0.001))
 
         if success_cfg["y_min"] <= ego_pos[1] <= success_cfg["y_max"]:
             success_counter += 1
@@ -492,9 +494,9 @@ def _run_lane_change_scenario(cfg_path):
         obs["x_traj"] = obs["x_traj"][:actual_steps]
         obs["y_traj"] = obs["y_traj"][:actual_steps]
 
-    full_mean_trace = torch.stack(real_mean_trace).unsqueeze(0)
-    full_cov_trace = torch.stack(real_cov_trace).unsqueeze(0)
-    full_u_trace = torch.stack(real_u_trace).unsqueeze(0)
+    full_mean_trace, full_cov_trace, full_u_trace = _stack_traces(
+        real_mean_trace, real_cov_trace, real_u_trace
+    )
 
     check_collision(
         full_mean_trace, env_global,
@@ -507,11 +509,12 @@ def _run_lane_change_scenario(cfg_path):
         p_sat_trace=p_sat_trace, dt=dt, robot_dims=robot_dims, xlim=cfg["plot_xlim"],
     )
 
+    anim = cfg["animation"]
     animate_results(
         full_mean_trace, full_cov_trace, env_global,
-        filename=f"lane_change_{label.lower()}.gif",
-        plan_traces=all_plans, step=cfg["animation"]["step"],
-        robot_dims=robot_dims, title=f"Lane Change: {label}", bounds=None,
+        filename=anim["filename"], plan_traces=all_plans,
+        step=anim["step"], robot_dims=robot_dims,
+        title=anim["title"], bounds=anim.get("bounds"),
     )
 
 

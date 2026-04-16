@@ -60,5 +60,9 @@ plot_xlim: [-3, 35]
 
 label: "Aggressive"
 
+live_plot_pause: 0.001
+
 animation:
+  filename: lane_change_aggressive.gif
   step: 4
+  title: "Lane Change: Aggressive"

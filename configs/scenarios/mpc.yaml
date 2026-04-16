@@ -48,6 +48,10 @@ planner:
 # --- Output ---
 save_file: mpc.pt
 
+live_plot_pause: 0.01    # Seconds to pause between live plot updates
+
 animation:
-  step: 5        # Frame decimation for .gif output
+  filename: mpc_animation.gif
+  step: 5
   title: "MPC Receding Horizon"
+  bounds: [[-2, 12], [-2, 12]]

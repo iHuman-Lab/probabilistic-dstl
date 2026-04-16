@@ -872,8 +872,9 @@ def setup_mpc_live_plot(env):
     ax_map = fig.add_subplot(gs[0])
     ax_p = fig.add_subplot(gs[1])
 
-    ax_map.set_xlim(-2, 12)
-    ax_map.set_ylim(-2, 12)
+    if env.bounds:
+        ax_map.set_xlim(*env.bounds["x"])
+        ax_map.set_ylim(*env.bounds["y"])
     ax_map.set_aspect("equal")
     ax_map.grid(True, alpha=0.3)
     ax_map.set_title("MPC Live Execution")
@@ -911,7 +912,7 @@ def setup_mpc_live_plot(env):
     return fig, ax_map, ax_p, line_exec, line_plan, line_p
 
 
-def setup_lane_change_live_plot(road, obs_cfg, obs_x0, obs_y0, success_cfg, label=""):
+def setup_lane_change_live_plot(road, obs_cfg, obs_x0, obs_y0, success_cfg, label="", xlim=None):
     """Create the live-execution figure for lane-change MPC.
 
     Parameters
@@ -967,7 +968,8 @@ def setup_lane_change_live_plot(road, obs_cfg, obs_x0, obs_y0, success_cfg, labe
     )
     ax.add_patch(obs_rect)
     ax.legend(loc="upper right", fontsize=8)
-    ax.set_xlim(-3, 35)
+    if xlim:
+        ax.set_xlim(xlim)
     ax.set_ylim(road["y_min"] - 1, road["y_max"] + 1)
 
     return fig, ax, ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect
