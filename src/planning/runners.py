@@ -88,7 +88,7 @@ def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
             if (x_min - r_robot <= ego_pos[0] <= x_max + r_robot) and (
                 y_min - r_robot <= ego_pos[1] <= y_max + r_robot
             ):
-                log_utils._log.info(f"[COLLISION] Static obstacle at step {t}: Ego={ego_pos}")
+                log_utils.log_collision_event(t, "Static obstacle", f"ego={ego_pos}")
                 is_safe = False
 
         # 2. Moving Obstacles
@@ -101,7 +101,7 @@ def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
                 if dist < min_sep:
                     min_sep = dist
                 if dist < moving_obs_dist:
-                    log_utils._log.info(f"[COLLISION] Moving obstacle at step {t}: dist={dist:.2f}")
+                    log_utils.log_collision_event(t, "Moving obstacle", f"dist={dist:.2f}")
                     is_safe = False
 
     log_utils.log_safety(is_safe, min_sep)

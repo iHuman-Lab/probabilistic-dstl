@@ -1,5 +1,3 @@
-import logging
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,8 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from pdstl.base import BeliefTrajectory, Belief
 from utils import load_config
-
-logger = logging.getLogger(__name__)
+from planning import log_utils
 
 
 class TorchGaussianBelief(Belief):
@@ -39,7 +36,7 @@ class ProbabilisticSTLPlanner:
         self.cfg = {**load_config("configs/planning.yaml"), **(config or {})}
 
     # ------------------------------------------------------------------
-    # Private helpers
+    # helpers
     # ------------------------------------------------------------------
 
     def _init_controls(self, init_guess):
@@ -151,13 +148,19 @@ class ProbabilisticSTLPlanner:
         converged_iters = 0
 
         if verbose:
-            logger.info(f"Starting optimisation (max iters: {self.cfg['max_iters']})")
+            log_utils._log.info(f"Starting optimisation (max iters: {self.cfg['max_iters']})")
 
         if render:
             plt.ion()
             fig, ax = plt.subplots(figsize=(8, 8))
-            ax.set_xlim(-2, 12)
-            ax.set_ylim(-2, 12)
+            if self.env.bounds:
+                ax.set_xlim(*self.env.bounds["x"])
+                ax.set_ylim(*self.env.bounds["y"])
+            elif self.env.goal:
+                cx = sum(self.env.goal["x"]) / 2
+                cy = sum(self.env.goal["y"]) / 2
+                ax.set_xlim(cx - 8, cx + 8)
+                ax.set_ylim(cy - 8, cy + 8)
             ax.grid(True)
             ax.set_aspect("equal")
             if self.env.goal:
@@ -203,19 +206,19 @@ class ProbabilisticSTLPlanner:
             if loss_fn is None and current_p >= self.cfg["alpha"]:
                 converged_iters += 1
                 if converged_iters >= self.cfg["converge_patience"]:
-                    logger.info(f"Converged at iter {k}. P(Sat): {current_p:.4f}")
+                    log_utils._log.info(f"Converged at iter {k}. P(Sat): {current_p:.4f}")
                     break
             else:
                 converged_iters = 0
 
             if abs(prev_loss - J.item()) < self.cfg["loss_tol"] and k > self.cfg["min_iters"]:
                 if verbose:
-                    logger.info(f"Loss converged at iter {k}.")
+                    log_utils._log.info(f"Loss converged at iter {k}.")
                 break
             prev_loss = J.item()
 
             if verbose and k % 50 == 0:
-                logger.info(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f} | Best: {best_p:.4f}")
+                log_utils._log.info(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f} | Best: {best_p:.4f}")
 
         if render:
             plt.ioff()

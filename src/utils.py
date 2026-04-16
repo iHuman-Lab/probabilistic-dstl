@@ -73,10 +73,6 @@ class ColorPrint:
     def print_run(message, end="\n"):
         sys.stdout.write("\x1b[1;32m" + message.strip() + "\x1b[0m" + end)
 
-    @staticmethod
-    def print_warn(message, end="\n"):
-        sys.stderr.write("\x1b[1;33m" + message.strip() + "\x1b[0m" + end)
-
 
 def to_steps(interval_sec, t):
     """Convert a time interval [a, b] in seconds to integer step indices.

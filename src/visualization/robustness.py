@@ -105,33 +105,6 @@ def plot_stl_formula_bounds(
     return fig, axes
 
 
-def _draw_output_markers(ax, time, T, interval, oper):
-    """Draw markers on output corresponding to window positions."""
-    a = int(interval[0])
-    b_inf = np.isinf(interval[1])
-    b = T - 1 if b_inf else int(interval[1])
-
-    window_width = b - a + 1
-
-    if window_width >= T:
-        n_windows = 1
-    else:
-        n_windows = min(4, max(1, T // window_width))
-
-    max_start = max(0, T - 1 - b)
-    if max_start <= 0:
-        t_indices = np.array([0])
-    else:
-        t_indices = np.linspace(0, max_start, n_windows).astype(int)
-
-    alphas = np.linspace(0.35, 0.85, len(t_indices))
-
-    for i, t_idx in enumerate(t_indices):
-        if t_idx >= T:
-            continue
-        ax.plot(time[t_idx], oper[t_idx, 0], "o", color="#ff7f0e", alpha=alphas[i], markersize=5)
-
-
 def plot_piecewise_stl(
     time,
     robustness_trace,

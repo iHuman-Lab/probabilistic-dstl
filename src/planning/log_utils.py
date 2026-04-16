@@ -1,7 +1,5 @@
 """Formatted log helpers for the planning runners.
 
-All functions write to the "planning" logger at INFO level.
-Configure handlers in the application entry point (e.g. main.py) as needed.
 """
 import logging
 
@@ -45,6 +43,10 @@ def log_goal_reached(step):
 
 def log_lane_change_done(label, step):
     _log.info(f"Lane change ({label}) completed at step {step}.")
+
+
+def log_collision_event(step, kind, detail):
+    _log.info(f"[COLLISION] {kind} at step {step}: {detail}")
 
 
 def log_safety(is_safe, min_sep):
