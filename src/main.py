@@ -84,12 +84,12 @@ with skip_run("skip", "Example 4: MPC Receding Horizon") as check, check():
 # EXAMPLE 5: Lane Change with Moving Obstacle
 # =============================================================================
 
-with skip_run("skip", "Example 5: Lane Change") as check, check():
+with skip_run("run", "Example 5: Lane Change") as check, check():
     run_lane_change()
 
 # =============================================================================
 # EXAMPLE 6: Aggressive Lane Change
 # =============================================================================
 
-with skip_run("skip", "Example 6: Aggressive Lane Change") as check, check():
+with skip_run("run", "Example 6: Aggressive Lane Change") as check, check():
     run_lane_change_aggressive()

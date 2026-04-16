@@ -36,7 +36,7 @@ class ProbabilisticSTLPlanner:
         self.cfg = {**load_config("configs/planning.yaml"), **(config or {})}
 
     # ------------------------------------------------------------------
-    # helpers
+    # Optimsation
     # ------------------------------------------------------------------
 
     def _init_controls(self, init_guess):
