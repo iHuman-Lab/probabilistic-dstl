@@ -12,7 +12,6 @@ from planning.environment import Environment
 from planning.planner import ProbabilisticSTLPlanner
 from planning.visualization import (
     cov_ellipse_params,
-    plot_covariance_ellipse,
     setup_lane_change_live_plot,
     setup_mpc_live_plot,
     visualize_lane_change,
