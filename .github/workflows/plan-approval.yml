@@ -1,0 +1,94 @@
+name: Plan Approval & Branch Creation
+
+on:
+  issue_comment:
+    types: [created]
+
+# Explicitly elevate permissions for this workflow run
+permissions:
+  contents: write    # Required to create the new git branch
+  issues: write      # Required to assign the user and post comments
+
+jobs:
+  approve_and_branch:
+    # Trigger only when the PI/collaborator comments "/approve"
+    if: contains(github.event.comment.body, '/approve')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Process Plan Approval
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const assignee = context.payload.issue.user.login;
+            const issueNumber = context.issue.number;
+            const rawTitle = context.payload.issue.title;
+
+            // 1. Convert title to kebab-case and strip out illegal git characters
+            const cleanTitle = rawTitle
+              .toLowerCase()
+              .replace(/\[[^\]]*\]/g, '') // Remove brackets like [TASK]
+              .replace(/[^a-z0-9\s-_]/g, '') // Strip out special characters
+              .trim()
+              .replace(/[\s-_]+/g, '-'); // Turn spaces into a single dash
+
+            // Final format: feature/issue-5-test
+            const branchName = `feature/issue-${issueNumber}-${cleanTitle}`.replace(/-+$/, '');
+
+            // 2. Get the latest commit SHA from the default branch to branch off of
+            const { data: repoInfo } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            const defaultBranch = repoInfo.default_branch;
+            
+            const { data: refData } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${defaultBranch}`
+            });
+            const sha = refData.object.sha;
+
+            // 3. Create the tracking branch safely via Git API
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/heads/${branchName}`,
+                sha: sha
+              });
+              core.info(`Successfully created branch: ${branchName}`);
+            } catch (error) {
+              if (error.status === 422) {
+                core.info(`Branch ${branchName} already exists.`);
+              } else {
+                throw error;
+              }
+            }
+
+            // 4. Assign the issue to the student who proposed the plan
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              assignees: [assignee]
+            });
+
+            // 5. Post the approval notification with native checkout commands
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                `@${assignee} **Your task design and justification are approved!**`,
+                `This issue has been assigned to you, and your tracking branch has been generated.`,
+                ``,
+                `### Next Steps:`,
+                `\`\`\`bash`,
+                `git fetch origin`,
+                `git checkout ${branchName}`,
+                `\`\`\``
+              ].join('\n')
+            });
