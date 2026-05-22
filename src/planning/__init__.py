@@ -1,2 +1,2 @@
-from planning.planner import Planner
-from planning.environment import Environment
+from planning.planner import Planner as Planner
+from planning.environment import Environment as Environment
