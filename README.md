@@ -2,39 +2,66 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Gradient-based motion planner for uncertain dynamical systems using Probabilistic Signal Temporal Logic (STL). Given a Gaussian belief over the initial state, the planner finds a control sequence that satisfies a formal STL specification with high probability — avoiding obstacles, reaching goals, and respecting temporal constraints.
+Gradient-based motion planner for uncertain dynamical systems with formal correctness guarantees. The planner optimises a control sequence so that the resulting **Gaussian belief trajectory** satisfies a **Probabilistic Signal Temporal Logic (STL)** specification with probability ≥ α — handling obstacle avoidance, goal reaching, and temporal constraints all within one differentiable optimisation problem.
 
-## Overview
 
-Classical motion planners treat the robot's state as known exactly. This system instead propagates a **Gaussian belief** (mean + covariance) forward through the dynamics, and optimises controls so that the resulting belief trajectory satisfies an STL specification with probability ≥ α.
 
-The planner supports:
-- **Single-shot** planning: optimise a full open-loop trajectory in one pass
-- **MPC (receding-horizon)**: replan at every step as the robot executes
-- **Lane-change**: MPC with a moving obstacle and road constraints
+---
+
+
+```
+
+---
+
+## Scenarios
+
+| Scenario | Dynamics | Mode | Description |
+|----------|----------|------|-------------|
+| **Single Shot** | Single integrator | Open-loop | Optimise one full trajectory past static obstacles to a goal |
+| **MPC** | Single integrator | Receding-horizon | Replan at every step; terminate when goal is reached |
+| **Lane Change** | Double integrator | Receding-horizon | Change lanes around a moving vehicle on a two-lane road |
+| **Aggressive Lane Change** | Double integrator | Receding-horizon | Higher-speed lane change with tighter margins |
+
+All scenarios produce a live animation during execution and save an animated GIF and cached result.
+
+---
 
 ## Project Structure
 
 ```
 src/
-├── pdstl/              # Probabilistic STL library (operators, predicates, propagation)
+├── pdstl/                  # Probabilistic STL library
+│   ├── base.py             # Belief, BeliefTrajectory abstractions
+│   └── operators.py        # GreaterThan, Always, Eventually, And, Or, Until, Negation
+│
 ├── planning/
-│   ├── dynamics.py     # Single- and double-integrator belief dynamics
-│   ├── environment.py  # Workspace geometry + STL specification builder
-│   ├── planner.py      # Gradient-descent optimiser (Planner.solve)
-│   ├── runners.py      # Thin scenario wiring (load config → solve → visualise)
-│   └── log_utils.py    # Logging helpers
+│   ├── dynamics.py         # SingleIntegrator, DoubleIntegrator — propagate (μ, Σ) forward
+│   ├── environment.py      # Workspace geometry + STL spec builder (obstacles, goal, lanes)
+│   ├── planner.py          # Gradient-descent optimiser; Planner.solve() is the entry point
+│   ├── runners.py          # Thin scenario wiring: load config → solve → visualise
+│   └── log_utils.py        # Structured logging helpers
+│
 ├── visualization/
-│   ├── planning.py     # Static trajectory and environment plots
-│   ├── live_plots.py   # Live MPC figures that update step-by-step
-│   ├── animation.py    # GIF/video export
-│   └── robustness.py   # STL robustness bound plots
-└── main.py             # Runnable examples (toggle with skip_run)
+│   ├── planning.py         # Static trajectory and environment plots
+│   ├── live_plots.py       # Live figures that update at each MPC step
+│   ├── animation.py        # Animated GIF / video export
+│   └── robustness.py       # STL robustness bound plots
+│
+├── models/
+│   └── dynamics.py         # GaussianBelief, test signal generators
+│
+└── main.py                 # Six runnable examples (toggle with skip_run context manager)
 
 configs/
-├── planning.yaml           # Optimiser defaults (weights, convergence)
-└── scenarios/              # Per-scenario YAML (dynamics, horizon, environment)
+├── planning.yaml           # Optimiser defaults (weights, convergence thresholds)
+└── scenarios/              # Per-scenario YAML: dynamics, horizon, obstacles, goal
+    ├── single_shot.yaml
+    ├── mpc.yaml
+    ├── lane_change.yaml
+    └── lane_change_aggressive.yaml
 ```
+
+---
 
 ## Installation
 
@@ -42,42 +69,42 @@ configs/
 conda create -n pdstl python=3.10
 conda activate pdstl
 pip install -r requirements.txt
+
 ```
 
-## Quick Start
+---
 
-Edit `src/main.py` to select which examples to run using the `skip_run` toggle, then:
+## Running Examples
+
+Open `src/main.py` and use the `skip_run` context manager to enable the examples you want:
+
+```python
+with skip_run("run", "Example 3: Single Shot Motion Planning"):
+    run_single_shot()
+
+with skip_run("run", "Example 4: MPC Receding Horizon"):
+    run_mpc()
+
+with skip_run("run", "Example 5: Lane Change"):
+    run_lane_change()
+```
+
+Then run:
 
 ```bash
 python src/main.py
 ```
 
-Each scenario saves its result to `saved_data/` and writes an animated GIF. Re-running loads the cached result unless `force_run=True`.
 
-## Examples
-
-| Example | Description | Runner |
-|---------|-------------|--------|
-| Single Shot | Full trajectory optimisation, static obstacles | `run_single_shot()` |
-| MPC | Receding-horizon replanning to a goal | `run_mpc()` |
-| Lane Change | MPC with a moving vehicle, road geometry | `run_lane_change()` |
-| Aggressive Lane Change | Higher-speed variant | `run_lane_change_aggressive()` |
-
-## Key Concepts
-
-**Probabilistic STL** — An STL formula φ is evaluated on a belief trajectory. Instead of asking "does the trajectory satisfy φ?", the planner asks "does P(φ) ≥ α?" where α is a user-set probability threshold (default 0.95).
-
-**Belief dynamics** — The dynamics propagate a Gaussian (μ, Σ) forward. Process noise grows the covariance; the planner accounts for this uncertainty when checking obstacle avoidance and goal-reaching constraints.
-
-**Gradient descent** — Controls are parameterised as unconstrained values passed through `tanh` to enforce bounds. The loss combines STL satisfaction probability, control effort, smoothness, and heuristic terms (goal distance, obstacle repulsion). PyTorch autodiff computes gradients through the full belief rollout.
+---
 
 ## Dependencies
 
-- [PyTorch](https://pytorch.org) — differentiable optimisation
+- [PyTorch](https://pytorch.org) — differentiable belief propagation and optimisation
 - [NumPy](https://numpy.org) — numerical operations
-- [Matplotlib](https://matplotlib.org) — visualisation and animation
+- [Matplotlib](https://matplotlib.org) — static plots, live MPC figures, GIF export
 - [PyYAML](https://pyyaml.org) — scenario configuration
 
-## License
+---
 
-MIT
+
