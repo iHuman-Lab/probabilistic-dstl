@@ -1,0 +1,67 @@
+# Normal lane change scenario (MPC with double integrator).
+# Ego vehicle must overtake a slower moving obstacle by changing lanes.
+
+# --- Dynamics ---
+dynamics: double_integrator
+H: 40            # Planning horizon per MPC window (time steps)
+T_SIM: 100       # Total simulation steps
+dt: 0.2          # Time step [s]
+u_max: 2.5       # Maximum acceleration [m/s²]
+q_std: 0.01      # Process noise standard deviation
+
+# --- Initial condition ---
+x0_mean: [0.0, 0.0, 3.5, 0.0]   # [x, y, vx, vy]
+x0_cov_scale: 0.01
+
+# --- Road geometry ---
+road:
+  y_min: -2.0          # Bottom solid lane marking
+  y_max: 6.0           # Top solid lane marking
+  lane_divider: 2.0    # Dashed centre line (Lane 1 / Lane 2 boundary)
+  marking_x_range: [-5, 120]   # x-extent of painted lane markings
+
+# --- Goal: reach Lane 2 and stay ---
+goal:
+  x_range: [0.0, 200.0]
+  y_range: [2.0, 6.0]
+
+# --- Moving obstacle ---
+obstacle:
+  x0: 3.0          # Initial x position
+  speed: 0.3        # Constant longitudinal speed [m/s]
+  y: 4.0            # Fixed lateral position (Lane 2 centre)
+  width: 2.5
+  height: 1.5
+
+# --- Success criterion ---
+success:
+  y_min: 3.0        # Ego must be between y_min and y_max
+  y_max: 5.5
+  consecutive_steps: 15   # For this many consecutive steps
+
+# --- Planner overrides ---
+planner:
+  w_u: 0.02
+  w_du: 0.05
+  w_phi: 200.0
+  max_iters: 200
+  alpha: 0.90
+  w_dist: 22.0
+  w_obs: 12.0
+  w_visit: 0.0
+  loss_tol: 1.0e-5
+
+# --- Robot dimensions ---
+robot_dims: [2.0, 1.0]   # [length, width] in metres
+
+# --- Visualization ---
+plot_xlim: [-3, 35]   # x-axis range for lane-change plots
+
+label: "Normal"
+
+live_plot_pause: 0.001   # Seconds to pause between live plot updates
+
+animation:
+  filename: lane_change_normal.gif
+  step: 4
+  title: "Lane Change: Normal"

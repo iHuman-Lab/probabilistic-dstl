@@ -2,9 +2,6 @@ import torch
 import numpy as np
 
 
-# =============================================================================
-# BASE STL FORMULA
-# =============================================================================
 class STL_Formula(torch.nn.Module):
     """
     Base class for Probabilistic STL formulas.
@@ -48,9 +45,6 @@ class STL_Formula(torch.nn.Module):
         return Negation(self)
 
 
-# =============================================================================
-# SMOOTH MIN / MAX
-# =============================================================================
 class Minish(torch.nn.Module):
     """Compute minimum (exact or smooth) over specified dimension"""
 
@@ -77,9 +71,6 @@ class Maxish(torch.nn.Module):
             return x.max(dim=dim, keepdim=keepdim)[0]
 
 
-# =============================================================================
-# PREDICATES
-# =============================================================================
 class GreaterThan(STL_Formula):
     """
     Predicate: x >= threshold
@@ -108,7 +99,7 @@ class GreaterThan(STL_Formula):
 
             # UPPER BOUND: Optimistic assumption
 
-            upper_bound = belief.upper_bound()  # μ + k*σ
+            upper_bound = belief.upper_bound() 
             residual_upper = upper_bound - self.threshold
             prob_upper = belief.probability_of(residual_upper)
 
@@ -175,9 +166,6 @@ class LessThan(STL_Formula):
         return f"x <= {self.threshold}"
 
 
-# =============================================================================
-# BOOLEAN OPERATORS
-# =============================================================================
 class Negation(STL_Formula):
     """
     Negation: ¬ϕ
@@ -226,7 +214,10 @@ class And(STL_Formula):
         l1, u1 = trace1[..., 0:1], trace1[..., 1:2]
         l2, u2 = trace2[..., 0:1], trace2[..., 1:2]
 
-        lower = torch.maximum(l1 + l2 - 1.0, torch.zeros_like(l1))
+        # Product lower bound: P(A ∩ B) ≥ P(A)·P(B) under independence.
+        # Valid when sub-formulas constrain independent spatial regions (goal vs obstacles).
+        # Tighter than Fréchet (max(l1+l2-1,0)) and gives better gradients for optimisation.
+        lower = l1 * l2
         upper = torch.minimum(u1, u2)
 
         return torch.cat([lower, upper], dim=-1)
@@ -289,9 +280,6 @@ class Implies(STL_Formula):
         return f"({self.subformula1}) ⇒ ({self.subformula2})"
 
 
-# =============================================================================
-# TEMPORAL OPERATORS BASE
-# =============================================================================
 class Temporal_Operator(STL_Formula):
     """
     Base class for temporal operators.
@@ -397,9 +385,6 @@ class Temporal_Operator(STL_Formula):
         return torch.flip(output_reversed, dims=[1])
 
 
-# =============================================================================
-# ALWAYS
-# =============================================================================
 class Always(Temporal_Operator):
     """
     □_I ϕ: Always operator
@@ -451,9 +436,6 @@ class Always(Temporal_Operator):
         return f"□_{self._interval}({self.subformula})"
 
 
-# =============================================================================
-# EVENTUALLY
-# =============================================================================
 class Eventually(Temporal_Operator):
     """
     Eventually operator: ♢_I ϕ
@@ -505,9 +487,6 @@ class Eventually(Temporal_Operator):
         return f"♢_{self._interval}({self.subformula})"
 
 
-# =============================================================================
-# UNTIL
-# =============================================================================
 class Until(STL_Formula):
     """
     ϕ U_I ψ : Until operator

@@ -66,5 +66,5 @@ class OnlineBeliefTrajectory:
         obj.beliefs = lst
         return obj
 
-    def length(self):
+    def __len__(self):
         return len(self.beliefs)
