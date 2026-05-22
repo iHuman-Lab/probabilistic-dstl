@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from pdstl.base import BeliefTrajectory, Belief
 from utils import load_config
 from planning import log_utils
@@ -24,7 +22,7 @@ class TorchGaussianBelief(Belief):
         )
 
 
-class ProbabilisticSTLPlanner:
+class Planner:
     """Gradient-based motion planner for Probabilistic STL specifications."""
 
     def __init__(self, dynamics, environment, T, config=None):
@@ -35,12 +33,7 @@ class ProbabilisticSTLPlanner:
 
         self.cfg = {**load_config("configs/planning.yaml"), **(config or {})}
 
-    # ------------------------------------------------------------------
-    # Optimsation
-    # ------------------------------------------------------------------
-
     def _init_controls(self, init_guess):
-        """Initialise unconstrained control parameters V (pre-tanh space)."""
         if init_guess is not None:
             u_norm = torch.clamp(init_guess / (self.dyn.u_max + 1e-6), -0.99, 0.99)
             v_init = 0.5 * torch.log((1 + u_norm) / (1 - u_norm))
@@ -109,34 +102,29 @@ class ProbabilisticSTLPlanner:
         loss_phi = loss_fn(p_all) if loss_fn is not None else -torch.log(p_all + 1e-4)
 
         return (
-            self.cfg["w_u"]    * loss_u
-            + self.cfg["w_du"]   * loss_du
-            + self.cfg["w_phi"]  * loss_phi
+            self.cfg["w_u"]     * loss_u
+            + self.cfg["w_du"]  * loss_du
+            + self.cfg["w_phi"] * loss_phi
             + self.cfg["w_dist"] * self._goal_dist_loss(mean_trace)
             + self.cfg["w_obs"]  * self._obs_repulsion_loss(mean_trace)
-            + self.cfg["w_visit"]* self._visit_loss(mean_trace)
+            + self.cfg["w_visit"] * self._visit_loss(mean_trace)
         )
 
-
-
-    def solve(self, x0_mean, x0_cov, render=False, verbose=True, spec=None, init_guess=None, loss_fn=None):
-        """Find optimal controls via gradient descent on the STL objective.
+    def _optimize_window(
+        self, x0_mean, x0_cov, *, env=None, verbose=True,
+        spec=None, init_guess=None, loss_fn=None,
+    ):
+        """Run gradient-descent optimisation for one planning window.
 
         Parameters
         ----------
-        x0_mean, x0_cov : Tensors
-            Initial belief state.
-        render : bool
-            Show a live trajectory plot during optimisation.
-        verbose : bool
-            Log progress every 50 iterations.
-        spec : STL_Formula, optional
-            Override the environment's default specification.
-        init_guess : Tensor [T, 2], optional
-            Warm-start control sequence.
-        loss_fn : callable, optional
-            Custom loss on p_all; defaults to -log(p + eps).
+        env : Environment, optional
+            Override self.env for this window (used by MPC to pass env_t).
         """
+        if env is not None:
+            saved_env = self.env
+            self.env = env
+
         v_params = self._init_controls(init_guess)
         optimizer = optim.Adam([v_params], lr=self.cfg["lr"])
         phi = spec if spec is not None else self.env.get_specification(self.T)
@@ -150,35 +138,16 @@ class ProbabilisticSTLPlanner:
         if verbose:
             log_utils._log.info(f"Starting optimisation (max iters: {self.cfg['max_iters']})")
 
-        if render:
-            plt.ion()
-            fig, ax = plt.subplots(figsize=(8, 8))
-            if self.env.bounds:
-                ax.set_xlim(*self.env.bounds["x"])
-                ax.set_ylim(*self.env.bounds["y"])
-            elif self.env.goal:
-                cx = sum(self.env.goal["x"]) / 2
-                cy = sum(self.env.goal["y"]) / 2
-                ax.set_xlim(cx - 8, cx + 8)
-                ax.set_ylim(cy - 8, cy + 8)
-            ax.grid(True)
-            ax.set_aspect("equal")
-            if self.env.goal:
-                gx, gy = self.env.goal["x"], self.env.goal["y"]
-                ax.add_patch(patches.Rectangle((gx[0], gy[0]), gx[1]-gx[0], gy[1]-gy[0], color="green", alpha=0.3))
-            for obs in self.env.obstacles:
-                ox, oy = obs["x"], obs["y"]
-                ax.add_patch(patches.Rectangle((ox[0], oy[0]), ox[1]-ox[0], oy[1]-oy[0], color="red", alpha=0.5))
-            (line,) = ax.plot([], [], "b.-", alpha=0.5)
-            title = ax.set_title("Iteration 0")
-
         for k in range(self.cfg["max_iters"]):
             optimizer.zero_grad()
 
             mean_trace, cov_trace = self.dyn(v_params, x0_mean, x0_cov)
             u_seq = self.dyn.bound_control(v_params)
 
-            beliefs = [TorchGaussianBelief(mean_trace[:, t, :], cov_trace[:, t]) for t in range(self.T + 1)]
+            beliefs = [
+                TorchGaussianBelief(mean_trace[:, t, :], cov_trace[:, t])
+                for t in range(self.T + 1)
+            ]
             traj = BeliefTrajectory(beliefs)
 
             stl_trace = phi(traj)
@@ -190,12 +159,6 @@ class ProbabilisticSTLPlanner:
 
             current_p = p_all.item()
             history.append(J.item())
-
-            if render and k % 10 == 0:
-                path = mean_trace.detach().cpu().squeeze().numpy()
-                line.set_data(path[:, 0], path[:, 1])
-                title.set_text(f"Iteration {k} | P(Sat): {current_p:.4f}")
-                plt.pause(0.01)
 
             if current_p > best_p:
                 best_p = current_p
@@ -218,10 +181,253 @@ class ProbabilisticSTLPlanner:
             prev_loss = J.item()
 
             if verbose and k % 50 == 0:
-                log_utils._log.info(f"Iter {k:03d} | Loss: {J.item():.4f} | P(Sat): {current_p:.4f} | Best: {best_p:.4f}")
+                log_utils._log.info(
+                    f"Iter {k:03d} | Loss: {J.item():.4f} | "
+                    f"P(Sat): {current_p:.4f} | Best: {best_p:.4f}"
+                )
 
-        if render:
-            plt.ioff()
-            plt.close(fig)
+        if env is not None:
+            self.env = saved_env
 
         return best_mean, best_cov, best_u, best_p, history
+
+    def _step_with_noise(self, curr_mean, curr_cov, u):
+        pred_mean, next_cov = self.dyn.step(curr_mean, curr_cov, u)
+        noise = torch.distributions.MultivariateNormal(
+            torch.zeros_like(pred_mean), self.dyn.Q
+        ).sample()
+        return pred_mean + noise, next_cov
+
+    def _empty_u_trace(self, x0_mean):
+        return torch.empty(1, 0, 2, device=x0_mean.device, dtype=x0_mean.dtype)
+
+    def _shift_controls(self, prev_u_sol):
+        if prev_u_sol is None:
+            return None
+        return torch.cat([prev_u_sol[1:], prev_u_sol[-1:]], dim=0)
+
+    def _pack_result(
+        self,
+        *,
+        mean_trace,
+        cov_trace,
+        u_trace,
+        p_sat_trace=None,
+        loss_trace=None,
+        all_plans=None,
+        best_p=None,
+        mode,
+        stopped_reason=None,
+    ):
+        p_sat_trace = [] if p_sat_trace is None else p_sat_trace
+        loss_trace = [] if loss_trace is None else loss_trace
+        all_plans = [] if all_plans is None else all_plans
+        if best_p is None and p_sat_trace:
+            best_p = max(p_sat_trace)
+        return {
+            "mean_trace": mean_trace,
+            "cov_trace": cov_trace,
+            "u_trace": u_trace,
+            "p_sat_trace": p_sat_trace,
+            "loss_trace": loss_trace,
+            "history": loss_trace,
+            "all_plans": all_plans,
+            "best_p": 0.0 if best_p is None else best_p,
+            "mode": mode,
+            "stopped_reason": stopped_reason,
+        }
+
+    def _goal_center(self, env):
+        if env.goal is None:
+            return None
+        gx, gy = env.goal["x"], env.goal["y"]
+        return torch.tensor(
+            [(gx[0] + gx[1]) / 2, (gy[0] + gy[1]) / 2],
+            device=self.device,
+        )
+
+    def _mpc_env_for_step(self, step, curr_mean):
+        if self.cfg.get("mpc_mode") == "lane_change":
+            return self.env.make_local_lane_change_window(step, curr_mean, self.cfg)
+        return self.env
+
+    def _log_lane_change_step(self, step, curr_mean, best_p):
+        obs_pos = self.env.moving_obstacle_position(step)
+        if obs_pos is None:
+            return
+        ego_pos = curr_mean.detach().cpu().numpy()
+        dist = torch.linalg.norm(
+            curr_mean[:2] - torch.as_tensor(obs_pos, device=self.device, dtype=curr_mean.dtype)
+        ).item()
+        if step % 5 == 0:
+            log_utils.log_lane_step(step, ego_pos, obs_pos[0], dist, best_p)
+
+    def _lane_change_success(self, curr_mean, success_counter):
+        if self.env.success is None:
+            return success_counter, False
+        ego_y = curr_mean[1].item()
+        if self.env.success["y_min"] <= ego_y <= self.env.success["y_max"]:
+            success_counter += 1
+        else:
+            success_counter = 0
+        done = success_counter >= self.env.success["consecutive_steps"]
+        return success_counter, done
+
+    def _run_mpc_fixed(self, x0_mean, x0_cov, *, verbose, step_callback=None):
+        """Fixed-length MPC loop (T_SIM steps); lane-change builds a local env per step."""
+        T_SIM = self.cfg["T_SIM"]
+        curr_mean, curr_cov = x0_mean, x0_cov
+        mean_trace_list = [curr_mean]
+        cov_trace_list = [curr_cov]
+        u_trace_list = []
+        p_sat_trace = []
+        loss_trace = []
+        all_plans = []
+        prev_u_sol = None
+        success_counter = 0
+        stopped_reason = "T_SIM"
+
+        for t in range(T_SIM):
+            env_t = self._mpc_env_for_step(t, curr_mean)
+
+            win_guess = self._shift_controls(prev_u_sol)
+
+            best_mean, best_cov, best_u, best_p, history = self._optimize_window(
+                curr_mean, curr_cov,
+                env=env_t,
+                init_guess=win_guess,
+                verbose=False,
+            )
+
+            prev_u_sol = best_u.detach()
+            all_plans.append(best_mean)
+            p_sat_trace.append(best_p)
+            loss_trace.append(history[-1] if history else 0.0)
+
+            u_curr = best_u[0]
+            next_mean, next_cov = self._step_with_noise(curr_mean, curr_cov, u_curr)
+
+            mean_trace_list.append(next_mean)
+            cov_trace_list.append(next_cov)
+            u_trace_list.append(u_curr)
+            curr_mean = next_mean
+            curr_cov = next_cov
+
+            if step_callback is not None:
+                step_callback(t, curr_mean, curr_cov, best_mean, best_p)
+
+            if self.cfg.get("mpc_mode") == "lane_change":
+                self._log_lane_change_step(t, curr_mean, best_p)
+                success_counter, done = self._lane_change_success(curr_mean, success_counter)
+                if done:
+                    stopped_reason = "lane_change_success"
+                    log_utils.log_lane_change_done(self.env.label, t)
+                    break
+
+        u_trace = (
+            torch.stack(u_trace_list).unsqueeze(0)
+            if u_trace_list
+            else self._empty_u_trace(x0_mean)
+        )
+        return self._pack_result(
+            mean_trace=torch.stack(mean_trace_list).unsqueeze(0),
+            cov_trace=torch.stack(cov_trace_list).unsqueeze(0),
+            u_trace=u_trace,
+            p_sat_trace=p_sat_trace,
+            loss_trace=loss_trace,
+            all_plans=all_plans,
+            mode="mpc_fixed",
+            stopped_reason=stopped_reason,
+        )
+
+    def _run_mpc_goal(self, x0_mean, x0_cov, *, verbose, step_callback=None):
+        """Goal-distance MPC loop; terminates when ego reaches goal or MAX_STEPS exceeded."""
+        MAX_STEPS = self.cfg["MAX_STEPS"]
+        curr_mean, curr_cov = x0_mean, x0_cov
+        mean_trace_list = [curr_mean]
+        cov_trace_list = [curr_cov]
+        u_trace_list = []
+        p_sat_trace = []
+        loss_trace = []
+        all_plans = []
+        prev_u_sol = None
+        stopped_reason = "MAX_STEPS"
+
+        goal_center = self._goal_center(self.env)
+
+        step = 0
+        while step < MAX_STEPS:
+            dist_to_goal = None
+            if goal_center is not None:
+                dist_to_goal = torch.norm(curr_mean[:2] - goal_center)
+                if dist_to_goal < self.cfg.get("goal_reached_dist", 1.0):
+                    stopped_reason = "goal_reached"
+                    log_utils.log_goal_reached(step)
+                    break
+
+            win_guess = self._shift_controls(prev_u_sol)
+
+            best_mean, best_cov, best_u, best_p, history = self._optimize_window(
+                curr_mean, curr_cov,
+                verbose=False,
+                init_guess=win_guess,
+            )
+
+            prev_u_sol = best_u.detach()
+            all_plans.append(best_mean)
+            p_sat_trace.append(best_p)
+            loss_trace.append(history[-1] if history else 0.0)
+
+            u_curr = best_u[0]
+            next_mean, next_cov = self._step_with_noise(curr_mean, curr_cov, u_curr)
+
+            mean_trace_list.append(next_mean)
+            cov_trace_list.append(next_cov)
+            u_trace_list.append(u_curr)
+            curr_mean = next_mean
+            curr_cov = next_cov
+
+            if step_callback is not None:
+                step_callback(step, curr_mean, curr_cov, best_mean, best_p)
+
+            dist_value = dist_to_goal.item() if dist_to_goal is not None else 0.0
+            log_utils.log_mpc_step(step, curr_mean.cpu().numpy(), dist_value, best_p)
+
+            step += 1
+
+        u_trace = (
+            torch.stack(u_trace_list).unsqueeze(0)
+            if u_trace_list
+            else self._empty_u_trace(x0_mean)
+        )
+        return self._pack_result(
+            mean_trace=torch.stack(mean_trace_list).unsqueeze(0),
+            cov_trace=torch.stack(cov_trace_list).unsqueeze(0),
+            u_trace=u_trace,
+            p_sat_trace=p_sat_trace,
+            loss_trace=loss_trace,
+            all_plans=all_plans,
+            mode="mpc_goal",
+            stopped_reason=stopped_reason,
+        )
+
+    def solve(self, x0_mean, x0_cov, *, verbose=True, step_callback=None):
+        """Optimise controls; MPC mode triggered by 'T_SIM' or 'MAX_STEPS' in config."""
+        if "T_SIM" in self.cfg:
+            return self._run_mpc_fixed(x0_mean, x0_cov, verbose=verbose, step_callback=step_callback)
+        elif "MAX_STEPS" in self.cfg:
+            return self._run_mpc_goal(x0_mean, x0_cov, verbose=verbose, step_callback=step_callback)
+        else:
+            mean_trace, cov_trace, u_trace, best_p, history = self._optimize_window(
+                x0_mean, x0_cov, verbose=verbose
+            )
+            return self._pack_result(
+                mean_trace=mean_trace,
+                cov_trace=cov_trace,
+                u_trace=u_trace,
+                p_sat_trace=[best_p],
+                loss_trace=history,
+                best_p=best_p,
+                mode="single_shot",
+                stopped_reason="optimized",
+            )

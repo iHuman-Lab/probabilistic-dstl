@@ -1,5 +1,7 @@
 import math
 
+import numpy as np
+
 import torch
 
 from pdstl.operators import Always, And, Eventually, STL_Formula
@@ -47,6 +49,12 @@ class Environment:
         self.goal = None
         self.bounds = None
         self.device = device
+        self.road = None
+        self.lane_change = None
+        self.success = None
+        self.label = ""
+        self.plot_xlim = None
+        self.robot_dims = None
 
     def add_obstacle(self, x_range, y_range):
         """
@@ -100,6 +108,123 @@ class Environment:
         """
         self.bounds = {"x": x_range, "y": y_range}
 
+    def draw_on_ax(self, ax, **kwargs):
+        # Deferred import keeps environment.py free of matplotlib at module load time.
+        from visualization.planning import draw_env_on_ax
+        draw_env_on_ax(ax, self, **kwargs)
+
+    def configure_lane_change(
+        self,
+        *,
+        road,
+        obstacle,
+        goal,
+        success,
+        horizon,
+        total_steps,
+        dt,
+        label="",
+        plot_xlim=None,
+        robot_dims=None,
+    ):
+        """Configure a lane-change problem description from scenario values."""
+        self.road = dict(road)
+        self.success = dict(success)
+        self.label = label
+        self.plot_xlim = plot_xlim
+        self.robot_dims = tuple(robot_dims) if robot_dims is not None else None
+
+        marking_x = road["marking_x_range"]
+        self.add_lane_marking(x_range=marking_x, y_pos=road["lane_divider"], style="dashed")
+        self.add_lane_marking(x_range=marking_x, y_pos=road["y_min"], style="solid")
+        self.add_lane_marking(x_range=marking_x, y_pos=road["y_max"], style="solid")
+        self.set_goal(**goal)
+
+        total_points = total_steps + horizon + 10
+        times = np.arange(total_points) * dt
+        obs_x = obstacle["x0"] + obstacle["speed"] * times
+        obs_y = np.ones_like(times) * obstacle["y"]
+
+        self.lane_change = {
+            "obstacle": dict(obstacle),
+            "horizon": horizon,
+            "total_steps": total_steps,
+            "dt": dt,
+            "obs_x_global": obs_x,
+            "obs_y_global": obs_y,
+        }
+        self.add_moving_obstacle(
+            obs_x[: total_steps + 1],
+            obs_y[: total_steps + 1],
+            width=obstacle["width"],
+            height=obstacle["height"],
+        )
+
+    def make_local_lane_change_window(self, step, curr_mean, cfg):
+        """Build the local planning Environment for one lane-change MPC step."""
+        if self.road is None or self.lane_change is None:
+            raise ValueError("Lane-change local windows require configure_lane_change().")
+
+        horizon = self.lane_change["horizon"]
+        obstacle = self.lane_change["obstacle"]
+        obs_x = self.lane_change["obs_x_global"]
+        obs_y = self.lane_change["obs_y_global"]
+        road = self.road
+
+        curr_x = curr_mean.detach().cpu().numpy()[0]
+        goal_lookahead = cfg["mpc_goal_lookahead"]
+        goal_width = cfg["mpc_goal_window_width"]
+        goal_y_inset = cfg["goal_y_inset"]
+        lane_margin = cfg["lane_boundary_margin"]
+
+        env_local = Environment(device=self.device)
+        env_local.set_goal(
+            x_range=[curr_x + goal_lookahead, curr_x + goal_lookahead + goal_width],
+            y_range=[
+                self.goal["y"][0] + goal_y_inset,
+                self.goal["y"][1] - goal_y_inset,
+            ],
+        )
+
+        y_min_bound = road["y_min"] + lane_margin
+        if curr_mean[1] > road["lane_divider"] - lane_margin:
+            y_min_bound = road["lane_divider"]
+        env_local.set_bounds(
+            x_range=cfg["mpc_local_x_range"],
+            y_range=[y_min_bound, road["y_max"]],
+        )
+
+        idx_end = step + horizon + 1
+        if idx_end <= len(obs_x):
+            sl_x = obs_x[step:idx_end]
+            sl_y = obs_y[step:idx_end]
+        else:
+            pad = idx_end - len(obs_x)
+            sl_x = np.concatenate([obs_x[step:], np.full(pad, obs_x[-1])])
+            sl_y = np.concatenate([obs_y[step:], np.full(pad, obs_y[-1])])
+        env_local.add_moving_obstacle(
+            sl_x,
+            sl_y,
+            width=obstacle["width"],
+            height=obstacle["height"],
+        )
+        return env_local
+
+    def moving_obstacle_position(self, step):
+        """Return the first lane-change moving obstacle center at a global step."""
+        if self.lane_change is None:
+            return None
+        obs_x = self.lane_change["obs_x_global"]
+        obs_y = self.lane_change["obs_y_global"]
+        idx = min(step, len(obs_x) - 1)
+        return np.array([obs_x[idx], obs_y[idx]])
+
+    def clip_moving_obstacles(self, num_points):
+        """Trim moving obstacle trajectories to match an executed trajectory length."""
+        for obs in self.moving_obstacles:
+            obs["x_traj"] = obs["x_traj"][:num_points]
+            obs["y_traj"] = obs["y_traj"][:num_points]
+
     def get_predicates(self):
         """ """
         preds = {"obstacles": [], "visit": [], "goal": None}
@@ -132,16 +257,6 @@ class Environment:
         """
         Generates the STL formula: phi = (Always Safe) & (Eventually Goal)
 
-        Args:
-            T (int): Total time horizon
-            t_goal_start (int): Start time for goal satisfaction (t_g in PDF)
-            t_constraints_start (int): Start time for safety/bounds constraints.
-                Default=1 skips t=0 (the known initial state), which sits on the
-                workspace boundary (x=0.0 == x_min), so including t=0 would make
-                p_bounds = 0.5 and cap P_sat at ~0.45 regardless of plan quality.
-
-        Returns:
-            STL_Formula: The combined specification
         """
         preds = self.get_predicates()
         specs = []

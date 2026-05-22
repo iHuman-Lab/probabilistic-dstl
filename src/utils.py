@@ -8,8 +8,18 @@ import yaml
 
 
 def get_device():
-    """Return CUDA device if available, else CPU."""
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    """Return the configured torch device.
+
+    This project defaults to CPU because some lab machines expose CUDA libraries
+    even when the installed GPU/driver pair cannot actually initialize. Set
+    PDSTL_DEVICE=cuda or PDSTL_USE_CUDA=1 to opt into CUDA explicitly.
+    """
+    requested = os.environ.get("PDSTL_DEVICE")
+    if requested:
+        return torch.device(requested)
+    if os.environ.get("PDSTL_USE_CUDA") == "1" and torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
 
 
 def load_config(path):
@@ -68,10 +78,12 @@ class ColorPrint:
     @staticmethod
     def print_skip(message, end="\n"):
         sys.stderr.write("\x1b[88m" + message.strip() + "\x1b[0m" + end)
+        sys.stderr.flush()
 
     @staticmethod
     def print_run(message, end="\n"):
         sys.stdout.write("\x1b[1;32m" + message.strip() + "\x1b[0m" + end)
+        sys.stdout.flush()
 
 
 def to_steps(interval_sec, t):
