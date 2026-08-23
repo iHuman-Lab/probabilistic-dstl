@@ -54,16 +54,16 @@ from pdstl.operators import Always, GreaterThan
 from utils import create_belief_trajectory, to_steps
 
 t = np.linspace(0, 10, 100)
-mean, var = linear_system(a=0.01, b=1.0, g=2.0, q=2.5,
-                          mu=50.0, P=0.15, t=t,
-                          control_func=sinusoidial_input)
+mean, var = linear_system(
+    a=0.01, b=1.0, g=2.0, q=2.5, mu=50.0, P=0.15, t=t, control_func=sinusoidial_input
+)
 
 beliefs = create_belief_trajectory(mean, var)
 
-phi  = GreaterThan(threshold=50.0)
+phi = GreaterThan(threshold=50.0)
 spec = Always(phi, interval=to_steps([1, 2], t))
 
-p_sat = spec(beliefs)   # probability of satisfaction at each timestep
+p_sat = spec(beliefs)  # probability of satisfaction at each timestep
 ```
 
 ---

@@ -11,7 +11,7 @@ class TorchGaussianBelief(Belief):
 
     def __init__(self, mean_full, var_full):
         self.mean_full = mean_full  # [Batch, Dim]
-        self.var_full = var_full    # [Batch, Dim] or [Batch, Dim, Dim]
+        self.var_full = var_full  # [Batch, Dim] or [Batch, Dim, Dim]
 
     def value(self):
         return self.mean_full
@@ -62,7 +62,9 @@ class Planner:
             cx = (obs["x"][0] + obs["x"][1]) / 2.0
             cy = (obs["y"][0] + obs["y"][1]) / 2.0
             center = torch.tensor([[cx, cy]], device=self.device)
-            radius = max(obs["x"][1] - obs["x"][0], obs["y"][1] - obs["y"][0]) / 2.0 + margin
+            radius = (
+                max(obs["x"][1] - obs["x"][0], obs["y"][1] - obs["y"][0]) / 2.0 + margin
+            )
             dists = torch.norm(mean_trace[:, :, :2] - center, dim=2)
             loss = loss + torch.sum(torch.relu(radius - dists) ** 2)
 
@@ -96,23 +98,30 @@ class Planner:
 
     def _compute_loss(self, mean_trace, u_seq, p_all, loss_fn):
         """Compute the total weighted objective J."""
-        loss_u = torch.sum(u_seq ** 2)
+        loss_u = torch.sum(u_seq**2)
         u_diff = u_seq[1:] - u_seq[:-1]
-        loss_du = torch.sum(u_diff ** 2) + torch.sum(u_seq[0] ** 2)
+        loss_du = torch.sum(u_diff**2) + torch.sum(u_seq[0] ** 2)
         loss_phi = loss_fn(p_all) if loss_fn is not None else -torch.log(p_all + 1e-4)
 
         return (
-            self.cfg["w_u"]     * loss_u
-            + self.cfg["w_du"]  * loss_du
+            self.cfg["w_u"] * loss_u
+            + self.cfg["w_du"] * loss_du
             + self.cfg["w_phi"] * loss_phi
             + self.cfg["w_dist"] * self._goal_dist_loss(mean_trace)
-            + self.cfg["w_obs"]  * self._obs_repulsion_loss(mean_trace)
+            + self.cfg["w_obs"] * self._obs_repulsion_loss(mean_trace)
             + self.cfg["w_visit"] * self._visit_loss(mean_trace)
         )
 
     def _optimize_window(
-        self, x0_mean, x0_cov, *, env=None, verbose=True,
-        spec=None, init_guess=None, loss_fn=None,
+        self,
+        x0_mean,
+        x0_cov,
+        *,
+        env=None,
+        verbose=True,
+        spec=None,
+        init_guess=None,
+        loss_fn=None,
     ):
         """Run gradient-descent optimisation for one planning window.
 
@@ -136,7 +145,9 @@ class Planner:
         converged_iters = 0
 
         if verbose:
-            log_utils._log.info(f"Starting optimisation (max iters: {self.cfg['max_iters']})")
+            log_utils._log.info(
+                f"Starting optimisation (max iters: {self.cfg['max_iters']})"
+            )
 
         for k in range(self.cfg["max_iters"]):
             optimizer.zero_grad()
@@ -169,12 +180,17 @@ class Planner:
             if loss_fn is None and current_p >= self.cfg["alpha"]:
                 converged_iters += 1
                 if converged_iters >= self.cfg["converge_patience"]:
-                    log_utils._log.info(f"Converged at iter {k}. P(Sat): {current_p:.4f}")
+                    log_utils._log.info(
+                        f"Converged at iter {k}. P(Sat): {current_p:.4f}"
+                    )
                     break
             else:
                 converged_iters = 0
 
-            if abs(prev_loss - J.item()) < self.cfg["loss_tol"] and k > self.cfg["min_iters"]:
+            if (
+                abs(prev_loss - J.item()) < self.cfg["loss_tol"]
+                and k > self.cfg["min_iters"]
+            ):
                 if verbose:
                     log_utils._log.info(f"Loss converged at iter {k}.")
                 break
@@ -257,7 +273,8 @@ class Planner:
             return
         ego_pos = curr_mean.detach().cpu().numpy()
         dist = torch.linalg.norm(
-            curr_mean[:2] - torch.as_tensor(obs_pos, device=self.device, dtype=curr_mean.dtype)
+            curr_mean[:2]
+            - torch.as_tensor(obs_pos, device=self.device, dtype=curr_mean.dtype)
         ).item()
         if step % 5 == 0:
             log_utils.log_lane_step(step, ego_pos, obs_pos[0], dist, best_p)
@@ -293,7 +310,8 @@ class Planner:
             win_guess = self._shift_controls(prev_u_sol)
 
             best_mean, best_cov, best_u, best_p, history = self._optimize_window(
-                curr_mean, curr_cov,
+                curr_mean,
+                curr_cov,
                 env=env_t,
                 init_guess=win_guess,
                 verbose=False,
@@ -318,7 +336,9 @@ class Planner:
 
             if self.cfg.get("mpc_mode") == "lane_change":
                 self._log_lane_change_step(t, curr_mean, best_p)
-                success_counter, done = self._lane_change_success(curr_mean, success_counter)
+                success_counter, done = self._lane_change_success(
+                    curr_mean, success_counter
+                )
                 if done:
                     stopped_reason = "lane_change_success"
                     log_utils.log_lane_change_done(self.env.label, t)
@@ -368,7 +388,8 @@ class Planner:
             win_guess = self._shift_controls(prev_u_sol)
 
             best_mean, best_cov, best_u, best_p, history = self._optimize_window(
-                curr_mean, curr_cov,
+                curr_mean,
+                curr_cov,
                 verbose=False,
                 init_guess=win_guess,
             )
@@ -414,9 +435,13 @@ class Planner:
     def solve(self, x0_mean, x0_cov, *, verbose=True, step_callback=None):
         """Optimise controls; MPC mode triggered by 'T_SIM' or 'MAX_STEPS' in config."""
         if "T_SIM" in self.cfg:
-            return self._run_mpc_fixed(x0_mean, x0_cov, verbose=verbose, step_callback=step_callback)
+            return self._run_mpc_fixed(
+                x0_mean, x0_cov, verbose=verbose, step_callback=step_callback
+            )
         elif "MAX_STEPS" in self.cfg:
-            return self._run_mpc_goal(x0_mean, x0_cov, verbose=verbose, step_callback=step_callback)
+            return self._run_mpc_goal(
+                x0_mean, x0_cov, verbose=verbose, step_callback=step_callback
+            )
         else:
             mean_trace, cov_trace, u_trace, best_p, history = self._optimize_window(
                 x0_mean, x0_cov, verbose=verbose

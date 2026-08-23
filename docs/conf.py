@@ -63,8 +63,7 @@ html_last_updated_fmt = "%b %d, %Y"
 # Output file base name for HTML help builder.
 htmlhelp_basename = "probabilistic-dstldoc"
 
-latex_elements = {
-}
+latex_elements = {}
 
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).

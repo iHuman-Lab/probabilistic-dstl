@@ -12,6 +12,7 @@ import os
 import time
 
 import matplotlib
+
 if not os.environ.get("DISPLAY"):
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -37,13 +38,16 @@ def single_iteration_time(T, device, n_warmup=3, n_trials=10):
     """Return mean wall-clock time (seconds) for one forward+backward pass at horizon T."""
     _, spec, cfg = build_spec_and_env(T, device)
     _, planner_cfg = load_scenario_config("configs/scenarios/single_shot.yaml")
-    dyn = SingleIntegrator(dt=cfg["dt"], u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+    dyn = SingleIntegrator(
+        dt=cfg["dt"], u_max=cfg["u_max"], q_std=cfg["q_std"], device=device
+    )
 
     x0_mean = torch.tensor(cfg["x0_mean"], device=device)
     x0_cov = torch.eye(len(cfg["x0_mean"]), device=device) * cfg["x0_cov_scale"]
 
     v_params = nn.Parameter(
-        torch.randn(T, 2, device=device) * 0.1 + torch.tensor([0.5, 0.0], device=device),
+        torch.randn(T, 2, device=device) * 0.1
+        + torch.tensor([0.5, 0.0], device=device),
         requires_grad=True,
     )
     optimizer = optim.Adam([v_params], lr=planner_cfg["lr"])
@@ -67,11 +71,15 @@ def single_iteration_time(T, device, n_warmup=3, n_trials=10):
 
         # --- Loss ---
         u_seq = dyn.bound_control(v_params)
-        loss_u = torch.sum(u_seq ** 2)
+        loss_u = torch.sum(u_seq**2)
         u_diff = u_seq[1:] - u_seq[:-1]
-        loss_du = torch.sum(u_diff ** 2)
+        loss_du = torch.sum(u_diff**2)
         loss_phi = -torch.log(p_all + 1e-4)
-        J = planner_cfg["w_u"] * loss_u + planner_cfg["w_du"] * loss_du + planner_cfg["w_phi"] * loss_phi
+        J = (
+            planner_cfg["w_u"] * loss_u
+            + planner_cfg["w_du"] * loss_du
+            + planner_cfg["w_phi"] * loss_phi
+        )
 
         # --- Backward ---
         J.backward()
@@ -113,7 +121,7 @@ def run_benchmark(T_values=None, device_str="cpu"):
         mu, sigma = single_iteration_time(T, device)
         means_ms.append(mu * 1e3)
         stds_ms.append(sigma * 1e3)
-        print(f"{T:>6}  {mu*1e3:>12.3f}  {sigma*1e3:>10.3f}")
+        print(f"{T:>6}  {mu * 1e3:>12.3f}  {sigma * 1e3:>10.3f}")
 
     return np.array(T_values), np.array(means_ms), np.array(stds_ms)
 
@@ -130,11 +138,21 @@ def plot_results(T_values, means_ms, stds_ms, save_path="benchmark_complexity.pd
     # --- Left panel: linear scale ---
     ax = axes[0]
     ax.errorbar(
-        T_values, means_ms, yerr=stds_ms,
-        fmt="o", color="#2563EB", capsize=4, label="Measured",
+        T_values,
+        means_ms,
+        yerr=stds_ms,
+        fmt="o",
+        color="#2563EB",
+        capsize=4,
+        label="Measured",
     )
-    ax.plot(T_fit, y_fit, "--", color="#DC2626",
-            label=f"Linear fit  (slope={slope:.3f} ms/step)")
+    ax.plot(
+        T_fit,
+        y_fit,
+        "--",
+        color="#DC2626",
+        label=f"Linear fit  (slope={slope:.3f} ms/step)",
+    )
     ax.set_xlabel("Planning horizon $T$ (steps)", fontsize=12)
     ax.set_ylabel("Wall-clock time per iteration (ms)", fontsize=12)
     ax.set_title("Computation time vs. $T$ (linear scale)", fontsize=12)
@@ -144,8 +162,13 @@ def plot_results(T_values, means_ms, stds_ms, save_path="benchmark_complexity.pd
     # --- Right panel: log-log scale ---
     ax = axes[1]
     ax.errorbar(
-        T_values, means_ms, yerr=stds_ms,
-        fmt="o", color="#2563EB", capsize=4, label="Measured",
+        T_values,
+        means_ms,
+        yerr=stds_ms,
+        fmt="o",
+        color="#2563EB",
+        capsize=4,
+        label="Measured",
     )
     log_T = np.log10(T_values)
     log_t = np.log10(means_ms)
@@ -153,8 +176,13 @@ def plot_results(T_values, means_ms, stds_ms, save_path="benchmark_complexity.pd
     exponent = log_coeffs[0]
     T_log_fit = np.logspace(np.log10(T_values[0]), np.log10(T_values[-1]), 200)
     y_log_fit = 10 ** np.polyval(log_coeffs, np.log10(T_log_fit))
-    ax.loglog(T_log_fit, y_log_fit, "--", color="#DC2626",
-              label=f"Power-law fit  (exponent={exponent:.2f})")
+    ax.loglog(
+        T_log_fit,
+        y_log_fit,
+        "--",
+        color="#DC2626",
+        label=f"Power-law fit  (exponent={exponent:.2f})",
+    )
     ax.set_xlabel("Planning horizon $T$ (steps)", fontsize=12)
     ax.set_ylabel("Wall-clock time per iteration (ms)", fontsize=12)
     ax.set_title("Computation time vs. $T$ (log-log scale)", fontsize=12)
@@ -177,7 +205,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     parser.add_argument(
-        "--T", nargs="+", type=int,
+        "--T",
+        nargs="+",
+        type=int,
         default=[10, 25, 50, 75, 100, 150, 200, 300, 400, 500],
         help="Planning horizons to benchmark",
     )

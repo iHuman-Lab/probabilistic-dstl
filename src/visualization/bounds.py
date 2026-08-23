@@ -2,17 +2,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-
 # Tableau 20 colors
 PALETTE = {
-    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
-    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
-    "visit":      {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
+    "ego": {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
+    "plan": {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
+    "visit": {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
     "obs_static": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Red (Light/Dark)
-    "obs_moving": {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Purple (Light/Dark)
-    "lane":       {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
-    "goal":       {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
-    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
+    "obs_moving": {
+        "fill": "#c5b0d5",
+        "stroke": "#9467bd",
+    },  # Tableau Purple (Light/Dark)
+    "lane": {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
+    "goal": {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
+    "road": {"fill": "#F2F2F7"},  # Light Gray Background
 }
 
 
@@ -41,9 +43,15 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
     # Create figure with two subplots
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), height_ratios=[2, 1])
 
-    # TRACE PLOT 
+    # TRACE PLOT
     # Main trace and uncertainty
-    ax1.plot(time, mean_trace, color=PALETTE["ego"]["stroke"], linewidth=2, label="Mean Height")
+    ax1.plot(
+        time,
+        mean_trace,
+        color=PALETTE["ego"]["stroke"],
+        linewidth=2,
+        label="Mean Height",
+    )
     ax1.fill_between(
         time,
         lower_sigma,
@@ -52,7 +60,7 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
         alpha=0.2,
         label="±1σ Interval",
     )
-   
+
     # Threshold line
     ax1.axhline(
         threshold,
@@ -112,7 +120,11 @@ def plot_mean_with_sigma_bounds(time, mean_trace, var_trace, threshold=50):
     robustness = lower_sigma - threshold
 
     ax2.plot(
-        time, robustness, label="Robustness ρ(t) = x(t) - h", color=PALETTE["ego"]["stroke"], linewidth=2
+        time,
+        robustness,
+        label="Robustness ρ(t) = x(t) - h",
+        color=PALETTE["ego"]["stroke"],
+        linewidth=2,
     )
     # Zero line (satisfaction boundary)
     ax2.axhline(

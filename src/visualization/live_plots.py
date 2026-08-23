@@ -2,7 +2,12 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 from matplotlib.transforms import blended_transform_factory
 
-from visualization.planning import PALETTE, cov_ellipse_params, draw_env_on_ax, draw_road_backdrop
+from visualization.planning import (
+    PALETTE,
+    cov_ellipse_params,
+    draw_env_on_ax,
+    draw_road_backdrop,
+)
 
 
 def setup_mpc_live_plot(env):
@@ -22,8 +27,17 @@ def setup_mpc_live_plot(env):
 
     draw_env_on_ax(ax_map, env)
 
-    (line_exec,) = ax_map.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", label="Executed Path")
-    (line_plan,) = ax_map.plot([], [], color=PALETTE["plan"]["stroke"], linestyle="--", alpha=0.8, label="Planned Window")
+    (line_exec,) = ax_map.plot(
+        [], [], color=PALETTE["ego"]["stroke"], marker="o", label="Executed Path"
+    )
+    (line_plan,) = ax_map.plot(
+        [],
+        [],
+        color=PALETTE["plan"]["stroke"],
+        linestyle="--",
+        alpha=0.8,
+        label="Planned Window",
+    )
     ax_map.legend(loc="upper left")
 
     ax_p.set_xlim(0, 100)
@@ -32,7 +46,9 @@ def setup_mpc_live_plot(env):
     ax_p.set_xlabel("Step")
     ax_p.set_ylabel("P(Sat)")
     ax_p.grid(True)
-    (line_p,) = ax_p.plot([], [], color=PALETTE["goal"]["stroke"], marker="o", markersize=3)
+    (line_p,) = ax_p.plot(
+        [], [], color=PALETTE["goal"]["stroke"], marker="o", markersize=3
+    )
 
     return fig, ax_map, ax_p, line_exec, line_plan, line_p
 
@@ -50,8 +66,11 @@ def setup_lane_change_live_plot(env, label="", xlim=None):
 
     if env.success:
         ax.axhspan(
-            env.success["y_min"], env.success["y_max"],
-            color=PALETTE["goal"]["fill"], alpha=0.15, zorder=1,
+            env.success["y_min"],
+            env.success["y_max"],
+            color=PALETTE["goal"]["fill"],
+            alpha=0.15,
+            zorder=1,
         )
 
     divider_y = next(
@@ -60,31 +79,63 @@ def setup_lane_change_live_plot(env, label="", xlim=None):
     if divider_y is not None:
         _blend = blended_transform_factory(ax.transAxes, ax.transData)
         ax.text(
-            0.02, (road_lo + divider_y) / 2, "Lane 1",
-            transform=_blend, color=PALETTE["lane"]["stroke"],
-            fontsize=8, va="center", ha="left",
+            0.02,
+            (road_lo + divider_y) / 2,
+            "Lane 1",
+            transform=_blend,
+            color=PALETTE["lane"]["stroke"],
+            fontsize=8,
+            va="center",
+            ha="left",
         )
         ax.text(
-            0.02, (divider_y + road_hi) / 2, "Lane 2",
-            transform=_blend, color=PALETTE["lane"]["stroke"],
-            fontsize=8, va="center", ha="left",
+            0.02,
+            (divider_y + road_hi) / 2,
+            "Lane 2",
+            transform=_blend,
+            color=PALETTE["lane"]["stroke"],
+            fontsize=8,
+            va="center",
+            ha="left",
         )
 
     (ego_dot,) = ax.plot(
-        [], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8,
-        label="Ego", zorder=10,
+        [],
+        [],
+        color=PALETTE["ego"]["stroke"],
+        marker="o",
+        markersize=8,
+        label="Ego",
+        zorder=10,
     )
     (ego_trail,) = ax.plot(
-        [], [], color=PALETTE["ego"]["stroke"], alpha=0.4, linewidth=1.5, zorder=9,
+        [],
+        [],
+        color=PALETTE["ego"]["stroke"],
+        alpha=0.4,
+        linewidth=1.5,
+        zorder=9,
     )
     (plan_line,) = ax.plot(
-        [], [], color=PALETTE["plan"]["stroke"], linestyle="--",
-        alpha=0.8, linewidth=1.5, label="Plan", zorder=8,
+        [],
+        [],
+        color=PALETTE["plan"]["stroke"],
+        linestyle="--",
+        alpha=0.8,
+        linewidth=1.5,
+        label="Plan",
+        zorder=8,
     )
     ego_cov_patch = patches.Ellipse(
-        (0, 0), width=0, height=0, angle=0,
-        facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"],
-        alpha=0.2, label="Uncertainty", zorder=7,
+        (0, 0),
+        width=0,
+        height=0,
+        angle=0,
+        facecolor=PALETTE["ego"]["fill"],
+        edgecolor=PALETTE["ego"]["stroke"],
+        alpha=0.2,
+        label="Uncertainty",
+        zorder=7,
     )
     ax.add_patch(ego_cov_patch)
 
@@ -92,9 +143,13 @@ def setup_lane_change_live_plot(env, label="", xlim=None):
     obs_pos0 = env.moving_obstacle_position(0)
     obs_rect = patches.Rectangle(
         (obs_pos0[0] - obs0["width"] / 2, obs_pos0[1] - obs0["height"] / 2),
-        obs0["width"], obs0["height"],
-        facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"],
-        alpha=0.8, label="Other Car", zorder=9,
+        obs0["width"],
+        obs0["height"],
+        facecolor=PALETTE["obs_moving"]["fill"],
+        edgecolor=PALETTE["obs_moving"]["stroke"],
+        alpha=0.8,
+        label="Other Car",
+        zorder=9,
     )
     ax.add_patch(obs_rect)
     ax.legend(loc="upper right", fontsize=8)
@@ -105,8 +160,9 @@ def setup_lane_change_live_plot(env, label="", xlim=None):
     return fig, ax, ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect
 
 
-def update_mpc_live_plot(fig, line_exec, line_plan, line_p, ax_p,
-                         real_mean_trace, best_mean, p_sat_trace):
+def update_mpc_live_plot(
+    fig, line_exec, line_plan, line_p, ax_p, real_mean_trace, best_mean, p_sat_trace
+):
     xs = [m[0].item() for m in real_mean_trace]
     ys = [m[1].item() for m in real_mean_trace]
     line_exec.set_data(xs, ys)
@@ -123,8 +179,16 @@ def update_mpc_live_plot(fig, line_exec, line_plan, line_p, ax_p,
 
 
 def update_lane_change_plot(
-    ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect,
-    real_mean_trace, curr_cov, p_mean, obs_pos, obs_cfg,
+    ego_dot,
+    ego_trail,
+    plan_line,
+    ego_cov_patch,
+    obs_rect,
+    real_mean_trace,
+    curr_cov,
+    p_mean,
+    obs_pos,
+    obs_cfg,
 ):
     ego_pos = real_mean_trace[-1].cpu().numpy()
     ego_x, ego_y = ego_pos[0], ego_pos[1]
@@ -143,7 +207,9 @@ def update_lane_change_plot(
 
     plan_np = p_mean.detach().cpu().squeeze().numpy()
     plan_line.set_data(plan_np[:, 0], plan_np[:, 1])
-    obs_rect.set_xy((obs_pos[0] - obs_cfg["width"] / 2, obs_pos[1] - obs_cfg["height"] / 2))
+    obs_rect.set_xy(
+        (obs_pos[0] - obs_cfg["width"] / 2, obs_pos[1] - obs_cfg["height"] / 2)
+    )
     plt.pause(0.001)
 
 
@@ -154,8 +220,9 @@ def make_mpc_live_callback(env):
     def callback(step, curr_mean, curr_cov, best_mean, best_p):
         real_trace.append(curr_mean.detach())
         p_sat_so_far.append(best_p)
-        update_mpc_live_plot(fig, line_exec, line_plan, line_p, ax_p,
-                             real_trace, best_mean, p_sat_so_far)
+        update_mpc_live_plot(
+            fig, line_exec, line_plan, line_p, ax_p, real_trace, best_mean, p_sat_so_far
+        )
 
     return callback
 
@@ -173,8 +240,16 @@ def make_lane_change_live_callback(env):
         if obs_pos is None:
             obs_pos = [0.0, 0.0]
         update_lane_change_plot(
-            ego_dot, ego_trail, plan_line, ego_cov_patch, obs_rect,
-            real_trace, curr_cov, best_mean, obs_pos, obs0,
+            ego_dot,
+            ego_trail,
+            plan_line,
+            ego_cov_patch,
+            obs_rect,
+            real_trace,
+            curr_cov,
+            best_mean,
+            obs_pos,
+            obs0,
         )
 
     return callback

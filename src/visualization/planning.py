@@ -681,7 +681,9 @@ def plot_lc_snapshots(
         ex, ey = mean_np[t, 0], mean_np[t, 1]
         if robot_dims:
             rw, rh = robot_dims
-            draw_ego_rect(ax, ex, ey, heading_deg(mean_np, t, T), rw, rh, alpha=alpha, zorder=7)
+            draw_ego_rect(
+                ax, ex, ey, heading_deg(mean_np, t, T), rw, rh, alpha=alpha, zorder=7
+            )
             label_y_off = rh / 2 + 0.45
         else:
             ax.plot(

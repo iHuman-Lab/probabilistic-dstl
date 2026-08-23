@@ -3,13 +3,16 @@ import os
 import numpy as np
 import torch
 
-from utils import get_device, load_config
 from planning import log_utils
 from planning.dynamics import DoubleIntegrator, SingleIntegrator
 from planning.environment import Environment
 from planning.planner import Planner
+from utils import get_device, load_config
 from visualization.animation import animate_results
-from visualization.live_plots import make_mpc_live_callback, make_lane_change_live_callback
+from visualization.live_plots import (
+    make_lane_change_live_callback,
+    make_mpc_live_callback,
+)
 from visualization.planning import visualize_lane_change, visualize_results
 
 RESULTS_DIR = "saved_data"
@@ -69,7 +72,9 @@ def build_dynamics(cfg, device):
             q_std=cfg["q_std"],
             device=device,
         )
-    return SingleIntegrator(dt=cfg["dt"], u_max=cfg["u_max"], q_std=cfg["q_std"], device=device)
+    return SingleIntegrator(
+        dt=cfg["dt"], u_max=cfg["u_max"], q_std=cfg["q_std"], device=device
+    )
 
 
 def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
@@ -99,10 +104,11 @@ def check_collision(mean_trace, env, r_robot=1.0, moving_obs_dist=2.25):
                 ox = xt[t].item() if isinstance(xt, torch.Tensor) else xt[t]
                 oy = yt[t].item() if isinstance(yt, torch.Tensor) else yt[t]
                 dist = np.linalg.norm(ego_pos[:2] - np.array([ox, oy]))
-                if dist < min_sep:
-                    min_sep = dist
+                min_sep = min(min_sep, dist)
                 if dist < moving_obs_dist:
-                    log_utils.log_collision_event(t, "Moving obstacle", f"dist={dist:.2f}")
+                    log_utils.log_collision_event(
+                        t, "Moving obstacle", f"dist={dist:.2f}"
+                    )
                     is_safe = False
 
     log_utils.log_safety(is_safe, min_sep)
@@ -124,14 +130,24 @@ def _normalise_result(data):
         result["history"] = result["loss_trace"]
     result.setdefault("p_sat_trace", [result.get("best_p", 0.0)])
     result.setdefault("all_plans", [])
-    result.setdefault("best_p", max(result["p_sat_trace"]) if result["p_sat_trace"] else 0.0)
+    result.setdefault(
+        "best_p", max(result["p_sat_trace"]) if result["p_sat_trace"] else 0.0
+    )
     result.setdefault("mode", "loaded")
     result.setdefault("stopped_reason", None)
     return result
 
 
-def _load_or_solve(cfg, planner_cfg, env, *, horizon, load_from=None, force_run=False,
-                   make_callback=None):
+def _load_or_solve(
+    cfg,
+    planner_cfg,
+    env,
+    *,
+    horizon,
+    load_from=None,
+    force_run=False,
+    make_callback=None,
+):
     result_path = _scenario_result_path(cfg, load_from)
     if not force_run and result_path and os.path.exists(result_path):
         log_utils.log_load(result_path)
@@ -154,7 +170,6 @@ def _load_or_solve(cfg, planner_cfg, env, *, horizon, load_from=None, force_run=
 def _clip_env_to_result(env, result):
     if env.moving_obstacles and "mean_trace" in result:
         env.clip_moving_obstacles(result["mean_trace"].shape[1])
-
 
 
 def run_single_shot(max_iterations=1000, load_from=None, force_run=False):
@@ -207,7 +222,12 @@ def run_mpc(load_from=None, force_run=False):
 
     log_utils._log.info(f"Starting MPC execution (horizon={H})...")
     result = _load_or_solve(
-        cfg, planner_cfg, env, horizon=H, load_from=load_from, force_run=force_run,
+        cfg,
+        planner_cfg,
+        env,
+        horizon=H,
+        load_from=load_from,
+        force_run=force_run,
         make_callback=make_mpc_live_callback,
     )
 
@@ -222,9 +242,14 @@ def run_mpc(load_from=None, force_run=False):
 
     anim = cfg["animation"]
     animate_results(
-        result["mean_trace"], result["cov_trace"], env,
-        filename=anim["filename"], plan_traces=result["all_plans"],
-        step=anim["step"], title=anim["title"], bounds=anim.get("bounds"),
+        result["mean_trace"],
+        result["cov_trace"],
+        env,
+        filename=anim["filename"],
+        plan_traces=result["all_plans"],
+        step=anim["step"],
+        title=anim["title"],
+        bounds=anim.get("bounds"),
     )
 
 
@@ -243,13 +268,19 @@ def _run_lane_change_scenario(cfg_path):
     env = build_environment(cfg, device)
     planner_cfg = {**planner_cfg, "T_SIM": cfg["T_SIM"], "mpc_mode": "lane_change"}
     result = _load_or_solve(
-        cfg, planner_cfg, env, horizon=H, load_from=None, force_run=True,
+        cfg,
+        planner_cfg,
+        env,
+        horizon=H,
+        load_from=None,
+        force_run=True,
         make_callback=make_lane_change_live_callback,
     )
     _clip_env_to_result(env, result)
 
     check_collision(
-        result["mean_trace"], env,
+        result["mean_trace"],
+        env,
         r_robot=planner_cfg["r_robot"],
         moving_obs_dist=planner_cfg["moving_obs_dist"],
     )
@@ -267,10 +298,15 @@ def _run_lane_change_scenario(cfg_path):
 
     anim = cfg["animation"]
     animate_results(
-        result["mean_trace"], result["cov_trace"], env,
-        filename=anim["filename"], plan_traces=result["all_plans"],
-        step=anim["step"], robot_dims=env.robot_dims,
-        title=anim["title"], bounds=anim.get("bounds"),
+        result["mean_trace"],
+        result["cov_trace"],
+        env,
+        filename=anim["filename"],
+        plan_traces=result["all_plans"],
+        step=anim["step"],
+        robot_dims=env.robot_dims,
+        title=anim["title"],
+        bounds=anim.get("bounds"),
     )
 
 

@@ -111,6 +111,7 @@ class Environment:
     def draw_on_ax(self, ax, **kwargs):
         # Deferred import keeps environment.py free of matplotlib at module load time.
         from visualization.planning import draw_env_on_ax
+
         draw_env_on_ax(ax, self, **kwargs)
 
     def configure_lane_change(
@@ -135,7 +136,9 @@ class Environment:
         self.robot_dims = tuple(robot_dims) if robot_dims is not None else None
 
         marking_x = road["marking_x_range"]
-        self.add_lane_marking(x_range=marking_x, y_pos=road["lane_divider"], style="dashed")
+        self.add_lane_marking(
+            x_range=marking_x, y_pos=road["lane_divider"], style="dashed"
+        )
         self.add_lane_marking(x_range=marking_x, y_pos=road["y_min"], style="solid")
         self.add_lane_marking(x_range=marking_x, y_pos=road["y_max"], style="solid")
         self.set_goal(**goal)
@@ -163,7 +166,9 @@ class Environment:
     def make_local_lane_change_window(self, step, curr_mean, cfg):
         """Build the local planning Environment for one lane-change MPC step."""
         if self.road is None or self.lane_change is None:
-            raise ValueError("Lane-change local windows require configure_lane_change().")
+            raise ValueError(
+                "Lane-change local windows require configure_lane_change()."
+            )
 
         horizon = self.lane_change["horizon"]
         obstacle = self.lane_change["obstacle"]
@@ -295,7 +300,7 @@ class Environment:
 
 
 # =============================================================================
-# PROBABILISTIC PREDICATES 
+# PROBABILISTIC PREDICATES
 # =============================================================================
 
 
@@ -398,7 +403,9 @@ class CircularObstaclePredicate(STL_Formula):
         self.radius = circle_def["radius"]
 
     def robustness_trace(self, belief_trajectory, **kwargs):
-        mu, sigma_stack = extract_trajectory_stats(belief_trajectory, diagonal_only=False)
+        mu, sigma_stack = extract_trajectory_stats(
+            belief_trajectory, diagonal_only=False
+        )
 
         # Distance vector from center
         diff = mu - self.center

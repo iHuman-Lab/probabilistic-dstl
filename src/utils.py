@@ -125,7 +125,11 @@ def create_belief_trajectory(mean_trace, var_trace, confidence_level=1.0):
     mean = torch.tensor(mean_trace, dtype=torch.float32).reshape(1, -1, 1)
     var = torch.tensor(var_trace, dtype=torch.float32).reshape(1, -1, 1)
     beliefs = [
-        GaussianBelief(mean[:, i:i+1, :], var[:, i:i+1, :], confidence_level=confidence_level)
+        GaussianBelief(
+            mean[:, i : i + 1, :],
+            var[:, i : i + 1, :],
+            confidence_level=confidence_level,
+        )
         for i in range(len(mean_trace))
     ]
     return BeliefTrajectory(beliefs)

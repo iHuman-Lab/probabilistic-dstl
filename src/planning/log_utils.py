@@ -1,6 +1,5 @@
-"""Formatted log helpers for the planning runners.
+"""Formatted log helpers for the planning runners."""
 
-"""
 import logging
 
 _log = logging.getLogger("planning")

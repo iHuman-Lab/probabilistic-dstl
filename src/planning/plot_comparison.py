@@ -118,10 +118,10 @@ def plot_comparison():
 
     # Trajectories — squeeze batch dim
     mean_prob = prob_data["mean_trace"].squeeze(0).numpy()  # [T+1, 2]
-    cov_prob = prob_data["cov_trace"].squeeze(0).numpy()    # [T+1, 2, 2]
-    mean_det = det_data["mean_trace"].squeeze(0).numpy()    # [T+1, 2]
-    u_prob = prob_data["u_trace"].squeeze(0).numpy()        # [T, 2]
-    u_det = det_data["u_trace"].squeeze(0).numpy()          # [T, 2]
+    cov_prob = prob_data["cov_trace"].squeeze(0).numpy()  # [T+1, 2, 2]
+    mean_det = det_data["mean_trace"].squeeze(0).numpy()  # [T+1, 2]
+    u_prob = prob_data["u_trace"].squeeze(0).numpy()  # [T, 2]
+    u_det = det_data["u_trace"].squeeze(0).numpy()  # [T, 2]
 
     # Metrics from comparison run
     results = cmp_data["results"]
@@ -142,14 +142,20 @@ def plot_comparison():
     ax = axes[0]
     draw_env(ax)
     draw_mc_overlay(ax, u_det)
-    ax.plot(mean_det[:, 0], mean_det[:, 1], "-", color="firebrick", linewidth=2,
-            label="Mean trajectory")
+    ax.plot(
+        mean_det[:, 0],
+        mean_det[:, 1],
+        "-",
+        color="firebrick",
+        linewidth=2,
+        label="Mean trajectory",
+    )
     ax.plot(*mean_det[0], "go", markersize=10, label="Start")
     ax.plot(*mean_det[-1], "r*", markersize=14, label="End")
     ax.set_title(
         f"Deterministic Baseline (q_std≈0)\n"
         f"$\\eta = {eta_det:.3f}$ [planning]   "
-        f"MC success: {det_success*100:.1f}%  (N={n_trials})",
+        f"MC success: {det_success * 100:.1f}%  (N={n_trials})",
         fontsize=11,
     )
     ax.set_xlabel("x [m]")
@@ -170,14 +176,20 @@ def plot_comparison():
         color="royalblue",
         label="2σ belief tube",
     )
-    ax.plot(mean_prob[:, 0], mean_prob[:, 1], "-", color="royalblue", linewidth=2,
-            label="Mean trajectory")
+    ax.plot(
+        mean_prob[:, 0],
+        mean_prob[:, 1],
+        "-",
+        color="royalblue",
+        linewidth=2,
+        label="Mean trajectory",
+    )
     ax.plot(*mean_prob[0], "go", markersize=10, label="Start")
     ax.plot(*mean_prob[-1], "r*", markersize=14, label="End")
     ax.set_title(
         f"pdSTL (Ours)\n"
         f"$P \\in [{p_lower:.3f},\\, {p_upper:.3f}]$ [planning]   "
-        f"MC success: {prob_success*100:.1f}%  (N={n_trials})",
+        f"MC success: {prob_success * 100:.1f}%  (N={n_trials})",
         fontsize=11,
     )
     ax.set_xlabel("x [m]")

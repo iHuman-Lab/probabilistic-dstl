@@ -45,15 +45,19 @@ def animate_results(
     for obs in env.moving_obstacles:
         w, h = obs["width"], obs["height"]
         xt = np.asarray(
-            obs["x_traj"].detach().cpu() if isinstance(obs["x_traj"], torch.Tensor)
+            obs["x_traj"].detach().cpu()
+            if isinstance(obs["x_traj"], torch.Tensor)
             else obs["x_traj"]
         )
         yt = np.asarray(
-            obs["y_traj"].detach().cpu() if isinstance(obs["y_traj"], torch.Tensor)
+            obs["y_traj"].detach().cpu()
+            if isinstance(obs["y_traj"], torch.Tensor)
             else obs["y_traj"]
         )
         rect = patches.Rectangle(
-            (0, 0), w, h,
+            (0, 0),
+            w,
+            h,
             facecolor=PALETTE["obs_moving"]["fill"],
             edgecolor=PALETTE["obs_moving"]["stroke"],
             alpha=0.5,
@@ -65,7 +69,9 @@ def animate_results(
 
     if robot_dims:
         robot_rect = patches.Rectangle(
-            (0, 0), robot_dims[0], robot_dims[1],
+            (0, 0),
+            robot_dims[0],
+            robot_dims[1],
             facecolor=PALETTE["ego"]["fill"],
             edgecolor=PALETTE["ego"]["stroke"],
             alpha=0.7,
@@ -76,13 +82,21 @@ def animate_results(
         robot_dot = None
     else:
         (robot_dot,) = ax.plot(
-            [], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8,
-            label="Robot Mean", zorder=10,
+            [],
+            [],
+            color=PALETTE["ego"]["stroke"],
+            marker="o",
+            markersize=8,
+            label="Robot Mean",
+            zorder=10,
         )
 
-    (trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], linewidth=2, alpha=0.6, zorder=9)
+    (trail,) = ax.plot(
+        [], [], color=PALETTE["ego"]["stroke"], linewidth=2, alpha=0.6, zorder=9
+    )
     (plan_line,) = ax.plot(
-        [], [],
+        [],
+        [],
         color=PALETTE["plan"]["stroke"],
         linestyle="--",
         linewidth=2,
@@ -91,7 +105,10 @@ def animate_results(
     )
 
     ellipse = patches.Ellipse(
-        (0, 0), width=0, height=0, angle=0,
+        (0, 0),
+        width=0,
+        height=0,
+        angle=0,
         facecolor=PALETTE["ego"]["fill"],
         edgecolor=PALETTE["ego"]["stroke"],
         alpha=0.25,
@@ -141,7 +158,12 @@ def animate_results(
 
             theta = np.degrees(np.arctan2(dy, dx))
             w, h = robot_dims[0], robot_dims[1]
-            t = transforms.Affine2D().translate(-w / 2, -h / 2).rotate_deg(theta).translate(x, y)
+            t = (
+                transforms.Affine2D()
+                .translate(-w / 2, -h / 2)
+                .rotate_deg(theta)
+                .translate(x, y)
+            )
             robot_rect.set_transform(t + ax.transData)
 
         trail.set_data(mean_np[: frame + 1, 0], mean_np[: frame + 1, 1])
@@ -173,7 +195,9 @@ def animate_results(
         return actors
 
     frames = range(0, T, step)
-    ani = FuncAnimation(fig, update, frames=frames, init_func=init, blit=False, interval=100)
+    ani = FuncAnimation(
+        fig, update, frames=frames, init_func=init, blit=False, interval=100
+    )
 
     if filename:
         print(f"Saving animation to {filename}...")

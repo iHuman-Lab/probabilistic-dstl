@@ -6,20 +6,31 @@ from matplotlib.animation import FuncAnimation
 
 # Tableau 20 colors
 PALETTE = {
-    "ego":        {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
-    "plan":       {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
-    "visit":      {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Green (Light/Dark)
+    "ego": {"fill": "#1f77b4", "stroke": "#1f77b4"},  # Tableau Blue
+    "plan": {"fill": "#ff7f0e", "stroke": "#ff7f0e"},  # Tableau Orange
+    "visit": {"fill": "#c5b0d5", "stroke": "#9467bd"},  # Tableau Green (Light/Dark)
     "obs_static": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Red (Light/Dark)
-    "obs_moving": {"fill": "#ff9896", "stroke": "#d62728"},  # Tableau Purple (Light/Dark)
-    "lane":       {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
-    "goal":       {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
-    "road":       {"fill": "#F2F2F7"},                        # Light Gray Background
+    "obs_moving": {
+        "fill": "#ff9896",
+        "stroke": "#d62728",
+    },  # Tableau Purple (Light/Dark)
+    "lane": {"fill": "#c7c7c7", "stroke": "#7f7f7f"},  # Tableau Gray (Light/Dark)
+    "goal": {"fill": "#98df8a", "stroke": "#2ca02c"},  # Tableau Green (Light/Dark)
+    "road": {"fill": "#F2F2F7"},  # Light Gray Background
 }
 
 
-
 def animate_results(
-    mean_trace, cov_trace, env, filename="trajectory.gif", plan_traces=None, step=1, dt=0.2, robot_dims=None, title="Motion Planning", bounds=None
+    mean_trace,
+    cov_trace,
+    env,
+    filename="trajectory.gif",
+    plan_traces=None,
+    step=1,
+    dt=0.2,
+    robot_dims=None,
+    title="Motion Planning",
+    bounds=None,
 ):
     """
     Animates the robot's trajectory with covariance ellipses.
@@ -47,14 +58,14 @@ def animate_results(
     else:
         ax.set_xlim(-5, 15)
         ax.set_ylim(-4, 8)
-        
+
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
     ax.set_title(title)
 
     # Draw Road Background
     road_lo = min(lm["y"] for lm in env.lane_markings) if env.lane_markings else -2.0
-    road_hi = max(lm["y"] for lm in env.lane_markings) if env.lane_markings else  6.0
+    road_hi = max(lm["y"] for lm in env.lane_markings) if env.lane_markings else 6.0
     ax.axhspan(road_lo, road_hi, color=PALETTE["road"]["fill"], zorder=0)
 
     # Draw Lane Markings
@@ -62,7 +73,14 @@ def animate_results(
         lx = lane["x"]
         ly = lane["y"]
         style = "--" if lane["style"] == "dashed" else "-"
-        ax.plot(lx, [ly, ly], color=PALETTE["lane"]["stroke"], linestyle=style, linewidth=2, alpha=0.7)
+        ax.plot(
+            lx,
+            [ly, ly],
+            color=PALETTE["lane"]["stroke"],
+            linestyle=style,
+            linewidth=2,
+            alpha=0.7,
+        )
 
     # Draw Goal — use axhspan for wide lane goals, rectangle for small regions
     if env.goal:
@@ -70,7 +88,14 @@ def animate_results(
         gy = env.goal["y"]
         if gx[1] - gx[0] > 50:
             # Wide range = target lane: highlight with horizontal band
-            ax.axhspan(gy[0], gy[1], color=PALETTE["goal"]["fill"], alpha=0.25, zorder=1, label="Target Lane")
+            ax.axhspan(
+                gy[0],
+                gy[1],
+                color=PALETTE["goal"]["fill"],
+                alpha=0.25,
+                zorder=1,
+                label="Target Lane",
+            )
         else:
             ax.add_patch(
                 patches.Rectangle(
@@ -123,14 +148,14 @@ def animate_results(
     # Draw Circle Obstacles
     for obs in env.circle_obstacles:
         c = patches.Circle(
-            obs["center"], 
-            obs["radius"], 
-            facecolor=PALETTE["obs_static"]["fill"], 
+            obs["center"],
+            obs["radius"],
+            facecolor=PALETTE["obs_static"]["fill"],
             edgecolor=PALETTE["obs_static"]["stroke"],
             alpha=0.5,
             label="Obstacle",
             hatch="//",
-            zorder=5
+            zorder=5,
         )
         ax.add_patch(c)
 
@@ -139,19 +164,47 @@ def animate_results(
     for obs in env.moving_obstacles:
         # Initialize at t=0
         w, h = obs["width"], obs["height"]
-        rect = patches.Rectangle((0,0), w, h, facecolor=PALETTE["obs_moving"]["fill"], edgecolor=PALETTE["obs_moving"]["stroke"], alpha=0.5, label="Moving Obs", zorder=6)
+        rect = patches.Rectangle(
+            (0, 0),
+            w,
+            h,
+            facecolor=PALETTE["obs_moving"]["fill"],
+            edgecolor=PALETTE["obs_moving"]["stroke"],
+            alpha=0.5,
+            label="Moving Obs",
+            zorder=6,
+        )
         ax.add_patch(rect)
         moving_patches.append((rect, obs))
 
     if robot_dims:
-        robot_rect = patches.Rectangle((0, 0), robot_dims[0], robot_dims[1], facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.7, label="Ego Vehicle", zorder=10)
+        robot_rect = patches.Rectangle(
+            (0, 0),
+            robot_dims[0],
+            robot_dims[1],
+            facecolor=PALETTE["ego"]["fill"],
+            edgecolor=PALETTE["ego"]["stroke"],
+            alpha=0.7,
+            label="Ego Vehicle",
+            zorder=10,
+        )
         ax.add_patch(robot_rect)
         robot_dot = None
     else:
-        (robot_dot,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], marker="o", markersize=8, label="Robot Mean", zorder=10)
+        (robot_dot,) = ax.plot(
+            [],
+            [],
+            color=PALETTE["ego"]["stroke"],
+            marker="o",
+            markersize=8,
+            label="Robot Mean",
+            zorder=10,
+        )
 
-    (trail,) = ax.plot([], [], color=PALETTE["ego"]["stroke"], linewidth=2, alpha=0.6, zorder=9)
-    
+    (trail,) = ax.plot(
+        [], [], color=PALETTE["ego"]["stroke"], linewidth=2, alpha=0.6, zorder=9
+    )
+
     (plan_line,) = ax.plot(
         [],
         [],
@@ -163,7 +216,14 @@ def animate_results(
     )
 
     ellipse = patches.Ellipse(
-        (0, 0), width=0, height=0, angle=0, facecolor=PALETTE["ego"]["fill"], edgecolor=PALETTE["ego"]["stroke"], alpha=0.25, zorder=8
+        (0, 0),
+        width=0,
+        height=0,
+        angle=0,
+        facecolor=PALETTE["ego"]["fill"],
+        edgecolor=PALETTE["ego"]["stroke"],
+        alpha=0.25,
+        zorder=8,
     )
     ax.add_patch(ellipse)
 
@@ -180,10 +240,12 @@ def animate_results(
         ellipse.set_width(0)
         ellipse.set_height(0)
         time_text.set_text("")
-        
+
         actors = [trail, ellipse, time_text, plan_line]
-        if robot_dot: actors.append(robot_dot)
-        if robot_dims: actors.append(robot_rect)
+        if robot_dot:
+            actors.append(robot_dot)
+        if robot_dims:
+            actors.append(robot_rect)
         actors.extend([p[0] for p in moving_patches])
         return actors
 
@@ -191,27 +253,32 @@ def animate_results(
         x, y = mean_np[frame, 0], mean_np[frame, 1]
 
         # Camera Follow (Zoom/Snap)
-        if bounds is None: # Only auto-follow if bounds not explicitly set
+        if bounds is None:  # Only auto-follow if bounds not explicitly set
             ax.set_xlim(x - 8.0, x + 12.0)
             ax.set_ylim(-4.0, 8.0)
 
         if robot_dot:
             robot_dot.set_data([x], [y])
-        
+
         if robot_dims:
             robot_rect.set_visible(True)
             if frame < len(mean_np) - 1:
-                dx = mean_np[frame+1, 0] - x
-                dy = mean_np[frame+1, 1] - y
+                dx = mean_np[frame + 1, 0] - x
+                dy = mean_np[frame + 1, 1] - y
             else:
-                dx = x - mean_np[frame-1, 0]
-                dy = y - mean_np[frame-1, 1]
-            
+                dx = x - mean_np[frame - 1, 0]
+                dy = y - mean_np[frame - 1, 1]
+
             theta = np.degrees(np.arctan2(dy, dx))
-            
+
             # Update Rectangle Transform (Rotate around center)
             w, h = robot_dims[0], robot_dims[1]
-            t = transforms.Affine2D().translate(-w/2, -h/2).rotate_deg(theta).translate(x, y)
+            t = (
+                transforms.Affine2D()
+                .translate(-w / 2, -h / 2)
+                .rotate_deg(theta)
+                .translate(x, y)
+            )
             robot_rect.set_transform(t + ax.transData)
 
         trail.set_data(mean_np[: frame + 1, 0], mean_np[: frame + 1, 1])
@@ -247,11 +314,13 @@ def animate_results(
             idx = min(frame, len(obs["x_traj"]) - 1)
             cx = obs["x_traj"][idx]
             cy = obs["y_traj"][idx]
-            rect.set_xy((cx - obs["width"]/2, cy - obs["height"]/2))
+            rect.set_xy((cx - obs["width"] / 2, cy - obs["height"] / 2))
 
         actors = [trail, ellipse, time_text, plan_line]
-        if robot_dot: actors.append(robot_dot)
-        if robot_dims: actors.append(robot_rect)
+        if robot_dot:
+            actors.append(robot_dot)
+        if robot_dims:
+            actors.append(robot_rect)
         actors.extend([p[0] for p in moving_patches])
         return actors
 

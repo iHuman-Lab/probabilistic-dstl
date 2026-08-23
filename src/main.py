@@ -21,8 +21,14 @@ with skip_run("skip", "Example 1: Always") as check, check():
     d = _demos["example1"]
     t = np.linspace(0, d["t_end"], d["n_steps"])
     mean, var = linear_system(
-        a=d["a"], b=d["b"], g=d["g"], q=d["q"],
-        mu=d["mu"], P=d["P"], t=t, control_func=sinusoidial_input,
+        a=d["a"],
+        b=d["b"],
+        g=d["g"],
+        q=d["q"],
+        mu=d["mu"],
+        P=d["P"],
+        t=t,
+        control_func=sinusoidial_input,
     )
 
     beliefs = create_belief_trajectory(mean, var)
@@ -35,11 +41,15 @@ with skip_run("skip", "Example 1: Always") as check, check():
     oper_trace = spec(beliefs)
 
     plot_stl_formula_bounds(
-        t, oper_trace,
-        mean_trace=mean, var_trace=var, predicate_trace=pred_trace,
+        t,
+        oper_trace,
+        mean_trace=mean,
+        var_trace=var,
+        predicate_trace=pred_trace,
         thresholds=d["threshold"],
         formula_str=f"□[{d['interval_sec'][0]}, {d['interval_sec'][1]}](x ≥ {d['threshold']})",
-        interval=interval_steps, operator_type="always",
+        interval=interval_steps,
+        operator_type="always",
     )
 
 # =============================================================================
@@ -59,11 +69,15 @@ with skip_run("skip", "Example 2: Piecewise") as check, check():
     always_trace = spec_always(beliefs)
 
     plot_piecewise_stl(
-        t, always_trace,
-        mean_trace=mean, var_trace=var, predicate_trace=pred_trace,
+        t,
+        always_trace,
+        mean_trace=mean,
+        var_trace=var,
+        predicate_trace=pred_trace,
         thresholds=d["threshold"],
         formula_str=f"□[{d['interval_steps'][0]}, {d['interval_steps'][1]}](x ≥ {d['threshold']})",
-        interval=d["interval_steps"], operator_type="always",
+        interval=d["interval_steps"],
+        operator_type="always",
     )
 
 # =============================================================================

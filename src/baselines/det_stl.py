@@ -92,14 +92,19 @@ class DetTemporalOperator(DetSTL_Formula):
         self.operation = None
         # Shift matrices for the sliding window (identical to stlcg)
         M = np.diag(np.ones(self.rnn_dim - 1), k=1)
-        self.register_buffer("M", torch.tensor(M, dtype=torch.float32), persistent=False)
+        self.register_buffer(
+            "M", torch.tensor(M, dtype=torch.float32), persistent=False
+        )
         b = torch.zeros(self.rnn_dim, 1, dtype=torch.float32)
         b[-1] = 1.0
         self.register_buffer("b", b, persistent=False)
 
     def _initialize_rnn_cell(self, x):
         """x: [B, T+1, 1] time-reversed. Init hidden state from first (= time T) element."""
-        h0 = torch.ones(x.shape[0], self.rnn_dim, x.shape[2], device=x.device) * x[:, :1, :]
+        h0 = (
+            torch.ones(x.shape[0], self.rnn_dim, x.shape[2], device=x.device)
+            * x[:, :1, :]
+        )
         if (self._interval[1] == np.inf) and (self._interval[0] > 0):
             d0 = x[:, :1, :]
             return ((d0, h0), 0.0)
@@ -356,7 +361,7 @@ def det_get_specification(env, T, t_goal_start=0, t_constraints_start=1):
     """
     specs = []
 
-    # 1. Goal 
+    # 1. Goal
     if env.goal:
         goal_pred = DetRectangularGoalPredicate(env.goal)
         specs.append(DetEventually(goal_pred, interval=[t_goal_start, T]))
