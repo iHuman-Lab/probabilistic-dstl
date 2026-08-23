@@ -113,6 +113,5 @@ ENV/
 
 # Data folder
 data/*
-
-
+report/*
 
