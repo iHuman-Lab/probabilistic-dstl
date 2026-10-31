@@ -51,6 +51,7 @@ class IterationRecord:
     beta: float
     control_cost: float = 0.0
     elapsed: float = 0.0  # optimizer seconds since the first step
+    margin: float = math.nan  # hard mean robustness (`select_by: margin`)
 
 
 @dataclass
@@ -68,9 +69,10 @@ class Planner:
     rollout(v) maps unconstrained parameters v to a BeliefRollout. The planner
     ascends the smooth lower bound (plus small control regularizers) for
     max_iters steps and returns the iterate with the highest exact lower
-    robustness (`select_by: pdstl`), or the final iterate without in-loop
-    exact scoring (`select_by: last`). Alpha is used only to report whether
-    that iterate meets the requested threshold.
+    robustness (`select_by: pdstl`), the cheapest iterate whose hard mean
+    robustness reaches `margin_target` (`select_by: margin`, the STLCG
+    baseline), or the final iterate (`select_by: last`). Alpha is used only
+    to report whether that iterate meets the requested threshold.
     """
 
     def __init__(self, dynamics, horizon, config=None):
@@ -91,10 +93,20 @@ class Planner:
         if not math.isfinite(self.cfg["margin_target"]):
             raise ValueError("margin_target must be finite")
         beta = self.cfg["margin_beta"]
-        if beta is not None and (not math.isfinite(beta) or beta <= 0):
-            raise ValueError("margin_beta must be finite and positive or null")
-        if self.cfg["select_by"] not in ("pdstl", "last"):
-            raise ValueError("select_by must be 'pdstl' or 'last'")
+        numeric = isinstance(beta, (int, float)) and not isinstance(beta, bool)
+        valid = (
+            beta is None
+            or beta == "schedule"
+            or (numeric and math.isfinite(beta) and beta > 0)
+        )
+        if not valid:
+            raise ValueError(
+                "margin_beta must be finite and positive, 'schedule' or null"
+            )
+        if self.cfg["select_by"] not in ("pdstl", "margin", "last"):
+            raise ValueError("select_by must be 'pdstl', 'margin' or 'last'")
+        if self.cfg["select_by"] == "margin" and not self.cfg["w_margin"]:
+            raise ValueError("select_by: margin needs w_margin > 0")
         threshold = self.cfg["score_threshold"]
         if threshold is not None and not 0.0 < threshold <= 1.0:
             raise ValueError("score_threshold must be in (0, 1] or null")
@@ -173,13 +185,32 @@ class Planner:
 
         return from_pdstl(spec)
 
-    def _margin_penalty(self, prediction, auxiliary):
+    def _margin_penalty(self, prediction, auxiliary, beta=None):
+        """Hinge on the smooth mean robustness: w * max(0, target - rho).
+
+        `margin_beta: schedule` smooths with the iterate's `beta` (the same
+        schedule as pdSTL); a number fixes the smoothing, null uses the hard
+        robustness. `beta` defaults to the end of the schedule.
+        """
         if auxiliary is None:
             return 0.0
+        smoothing = self.cfg["margin_beta"]
+        if smoothing == "schedule":
+            smoothing = (
+                self.cfg["smoothing"]["beta_end"] if beta is None else beta
+            )
         margin = auxiliary.robustness(
-            prediction.belief_trajectory, beta=self.cfg["margin_beta"]
+            prediction.belief_trajectory, beta=smoothing
         )
         return torch.relu(self.cfg["margin_target"] - margin).mean()
+
+    @staticmethod
+    def _hard_margin(prediction, auxiliary):
+        """Hard (unsmoothed) STL robustness of the predicted mean."""
+        with torch.no_grad():
+            return auxiliary.robustness(
+                prediction.belief_trajectory, beta=None
+            ).item()
 
     def _applied_controls(self, prediction, parameters):
         if prediction.aux is not None and "applied_controls" in prediction.aux:
@@ -208,7 +239,9 @@ class Planner:
             ).item()
             control_cost = self._control_cost(controls).item()
             loss = self._objective(
-                controls, smooth, self._margin_penalty(prediction, auxiliary)
+                controls,
+                smooth,
+                self._margin_penalty(prediction, auxiliary, beta),
             ).item()
             interval = spec.probability_interval(prediction.belief_trajectory)
             hard_interval = tuple(interval.tolist())
@@ -264,7 +297,8 @@ class Planner:
         not computed, and `planning_time` covers only the optimizer loop.
         """
         max_iters = self.cfg["max_iters"]
-        score_exact = self.cfg["select_by"] == "pdstl"
+        select_by = self.cfg["select_by"]
+        score_exact = select_by == "pdstl"
         auxiliary = self._auxiliary(spec, auxiliary_robustness)
         parameters = self._init_controls(init_guess)
         initial = self._evaluate(
@@ -290,7 +324,9 @@ class Planner:
                 else controls.new_zeros(())
             )
             loss = self._objective(
-                controls, lower, self._margin_penalty(prediction, auxiliary)
+                controls,
+                lower,
+                self._margin_penalty(prediction, auxiliary, beta),
             )
             if not torch.isfinite(loss):
                 raise ValueError("planning loss is not finite")
@@ -311,6 +347,11 @@ class Planner:
                 beta,
                 self._control_cost(controls).item(),
                 perf_counter() - started,
+                (
+                    self._hard_margin(prediction, auxiliary)
+                    if select_by == "margin"
+                    else math.nan
+                ),
             )
             candidates.append((iteration, record))
             if iteration >= 0:
@@ -343,11 +384,7 @@ class Planner:
                 )
             optimizer.step()
         planning_time = perf_counter() - started
-        result_iteration, selected = (
-            self._select_candidate(candidates, self.cfg["score_threshold"])
-            if score_exact
-            else candidates[-1]
-        )
+        result_iteration, selected = self._select(candidates)
         result = self.evaluate_controls(
             rollout,
             selected.controls,
@@ -374,6 +411,29 @@ class Planner:
             if met:
                 return min(reversed(met), key=lambda c: c[1].control_cost)
         return max(reversed(candidates), key=lambda c: c[1].hard_interval[0])
+
+    def _select(self, candidates):
+        """The returned (iteration, record), by the `select_by` rule."""
+        select_by = self.cfg["select_by"]
+        if select_by == "pdstl":
+            return self._select_candidate(
+                candidates, self.cfg["score_threshold"]
+            )
+        if select_by == "margin":
+            return self._select_by_margin(
+                candidates, self.cfg["margin_target"]
+            )
+        return candidates[-1]
+
+    @staticmethod
+    def _select_by_margin(candidates, target):
+        """Least control cost among iterates whose hard mean robustness
+        reaches `target`, else the highest robustness; later wins a tie.
+        """
+        met = [c for c in candidates if c[1].margin >= target]
+        if met:
+            return min(reversed(met), key=lambda c: c[1].control_cost)
+        return max(reversed(candidates), key=lambda c: c[1].margin)
 
     @staticmethod
     def shift_controls(controls):

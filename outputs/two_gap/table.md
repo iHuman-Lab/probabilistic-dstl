@@ -1,8 +1,0 @@
-| noise | position_std_cm | q | method | gap | success_pct | ci_pct | pdstl_score | effort | clearance_p05_cm |
-|---|---|---|---|---|---|---|---|---|---|
-| low | 5 | 0.0012 | STLCG | slit | 100.0 | [99.9, 100.0] | 1.0 | 25.3 | 11.7 |
-| low | 5 | 0.0012 | pdSTL | slit | 100.0 | [99.9, 100.0] | 1.0 | 18.4 | 4.2 |
-| medium | 20 | 0.0049 | STLCG | slit | 97.8 | [97.3, 98.2] | 0.935 | 25.3 | 4.9 |
-| medium | 20 | 0.0049 | pdSTL | around | 99.7 | [99.5, 99.8] | 0.993 | 34.2 | 78.3 |
-| high | 50 | 0.0122 | STLCG | slit | 49.4 | [48.0, 50.8] | 0.058 | 25.3 | 0.0 |
-| high | 50 | 0.0122 | pdSTL | around | 95.7 | [95.1, 96.3] | 0.786 | 34.9 | 13.5 |

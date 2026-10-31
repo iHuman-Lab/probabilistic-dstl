@@ -1,11 +1,11 @@
-"""Slit or around: does pdSTL put safety first as noise grows?
+"""Two-gap reach-avoid: does pdSTL put safety first as uncertainty grows?
 
-A floor block and an upper block leave a narrow slit between them (the short
-way); above the upper block the room is open (a longer way around). STLCG
-requires a fixed margin on the mean path; pdSTL requires an exact score. Both
-then spend the least effort. Each method plans from both routes, keeps one
-plan by its own rule, and the plan is executed open loop under noise (Monte
-Carlo, the same draws for every plan).
+A floor block and an upper block leave two gaps to the goal: a narrow slit
+between them (short) and the open room above the upper block (around,
+longer). STLCG requires a fixed margin on the mean path; pdSTL requires an
+exact score. Both then spend the least effort. Each method plans from both
+gaps, keeps one plan by its own rule, and the plan is executed open loop under
+noise (Monte Carlo, the same draws for every plan).
 
 Uncertainty levels are the robot's 1-sigma position uncertainty after a
 reference time of open-loop driving (config `uncertainty`); `load` turns each
@@ -23,12 +23,12 @@ and writes the table and figure. Outputs go to outputs/two_gap/.
 import argparse
 import copy
 import csv
+from itertools import pairwise
 
 import numpy as np
 import torch
 
 from baselines.det_stl import from_pdstl
-from experiments.reach_avoid import straight_line_guess
 from models.rollouts import (
     create_gaussian_belief_trajectory,
     sample_trajectories,
@@ -138,12 +138,78 @@ def mean_robustness(spec, mean_trace):
     return from_pdstl(spec).robustness(mean_trace, beta=None).item()
 
 
+# Initial guess: smooth rest-to-rest motion through a gap's waypoints
+
+
+def _rounded(points, passes=4):
+    """Chaikin corner cutting: the polyline with rounded corners, same ends."""
+    p = np.asarray(points, float)
+    for _ in range(passes):
+        cut = [p[0]]
+        for a, b in pairwise(p):
+            cut += [0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b]
+        p = np.vstack([*cut, p[-1]])
+    return p
+
+
+def _rest_to_rest(tau):
+    """Fraction of the path covered at normalized time tau in [0, 1].
+
+    The quintic 10 tau^3 - 15 tau^4 + 6 tau^5 starts and ends with zero
+    velocity and acceleration.
+    """
+    return 10 * tau**3 - 15 * tau**4 + 6 * tau**5
+
+
+def reference(cfg, waypoints, arrive=0.8):
+    """Positions [H+1, 2] from the start through `waypoints`.
+
+    The path is the rounded polyline; the robot starts at rest, arrives at
+    the last waypoint at rest after `arrive * H` steps, and waits there.
+    """
+    H = cfg["H"]
+    points = _rounded(np.vstack([cfg["x0_mean"][:2], waypoints]))
+    arc = np.r_[0, np.linalg.norm(np.diff(points, axis=0), axis=1).cumsum()]
+    tau = np.clip(np.arange(H + 1) / round(arrive * H), 0.0, 1.0)
+    covered = _rest_to_rest(tau) * arc[-1]
+    return torch.tensor(
+        np.stack(
+            [
+                np.interp(covered, arc, points[:, 0]),
+                np.interp(covered, arc, points[:, 1]),
+            ],
+            axis=1,
+        ),
+        dtype=torch.float32,
+    )
+
+
+def initial_guess(cfg, dyn, waypoints, kp=4.0, kd=4.0):
+    """Accelerations [H, 2] whose mean path tracks `reference`.
+
+    A PD tracker follows the reference; its accelerations, kept inside
+    u_max, are the guess. Both methods start from the same guess.
+    """
+    ref = reference(cfg, waypoints)
+    velocity = torch.cat([(ref[1:] - ref[:-1]) / cfg["dt"], torch.zeros(1, 2)])
+    state = torch.tensor(cfg["x0_mean"], dtype=torch.float32)
+    a, b = dyn.A.cpu(), dyn.B.cpu()
+    limit = 0.999 * dyn.u_max  # strictly inside the bound the planner inverts
+    controls = []
+    for t in range(cfg["H"]):
+        u = kp * (ref[t + 1] - state[:2]) + kd * (velocity[t + 1] - state[2:])
+        u = u.clamp(-limit, limit)
+        state = a @ state + b @ u
+        controls.append(u)
+    return torch.stack(controls).to(dyn.device)
+
+
 def plan(cfg, method, noise):
     """Optimize from each gap's start; return one row per candidate."""
     rows = []
     for gap, waypoints in cfg["gaps"].items():
         s = problem(cfg, method, noise)
-        guess = straight_line_guess(s.cfg, s.dyn, waypoints)
+        guess = initial_guess(s.cfg, s.dyn, waypoints)
         result = s.planner.optimize_window(
             s.rollout, spec=s.spec, init_guess=guess
         )
@@ -327,8 +393,8 @@ def table(cfg):
 def belief(cfg, controls, noise):
     """Mean and covariance of the open-loop plan at one noise level.
 
-    Cut at arrival, the step closest to the goal centre: the formula asks
-    only to reach the goal, so the plan is free to drift afterwards.
+    Cut at arrival, the first step the mean is inside the goal: the formula
+    asks only to reach the goal, so the plan is free to move on afterwards.
     """
     s = evaluation_problem(cfg, noise)
     mean, cov = s.state
@@ -339,10 +405,22 @@ def belief(cfg, controls, noise):
         covs.append(cov)
     mean = torch.stack(means).cpu().numpy()[:, :2]
     cov = torch.stack(covs).cpu().numpy()[:, :2, :2]
+    arrival = first_arrival(cfg, mean)
+    end = len(mean) if arrival is None else arrival + 1
+    return mean[:end], cov[:end]
+
+
+def first_arrival(cfg, mean):
+    """First step at which the path `mean` [T, >=2] is inside the goal."""
     (gx0, gx1), (gy0, gy1) = cfg["goal"]["x_range"], cfg["goal"]["y_range"]
-    centre = np.array([(gx0 + gx1) / 2, (gy0 + gy1) / 2])
-    arrival = int(np.argmin(np.linalg.norm(mean - centre, axis=1)))
-    return mean[: arrival + 1], cov[: arrival + 1]
+    inside = (
+        (mean[:, 0] >= gx0)
+        & (mean[:, 0] <= gx1)
+        & (mean[:, 1] >= gy0)
+        & (mean[:, 1] <= gy1)
+    )
+    hits = np.flatnonzero(inside)
+    return int(hits[0]) if len(hits) else None
 
 
 def _draw_room(ax, cfg):
@@ -427,6 +505,14 @@ def _draw_plan(ax, mean, cov, method, every):
         )
 
 
+def _ticks(limits, step=2, last=True):
+    """Ticks every `step` metres across `limits`; drop the upper end unless
+    `last`."""
+    lo, hi = limits
+    ticks = np.arange(lo, hi + 1e-9, step)
+    return ticks if last else ticks[ticks < hi]
+
+
 def figure(cfg, methods=("stlcg", "pdstl")):
     """One panel per noise level: both plans and their MC success.
 
@@ -462,9 +548,10 @@ def figure(cfg, methods=("stlcg", "pdstl")):
                 for m in reversed(methods)
             )
             ax.text(
-                0.25,
-                9.75,
+                0.025,
+                0.975,
                 success,
+                transform=ax.transAxes,
                 va="top",
                 fontsize=7.5,
                 linespacing=1.35,
@@ -480,9 +567,12 @@ def figure(cfg, methods=("stlcg", "pdstl")):
                 xlim=cfg["bounds"]["x_range"],
                 ylim=cfg["bounds"]["y_range"],
                 aspect="equal",
-                # the last panel alone shows x = 10, so labels do not meet
-                xticks=range(0, 11 if i == len(levels) - 1 else 10, 2),
-                yticks=range(0, 11, 2),
+                # the last panel alone shows the right wall's tick, so
+                # labels of neighbouring panels do not meet
+                xticks=_ticks(
+                    cfg["bounds"]["x_range"], last=i == len(levels) - 1
+                ),
+                yticks=_ticks(cfg["bounds"]["y_range"]),
             )
             ax.set_xlabel("x [m]", labelpad=1)
             ax.grid(color=COLORS["workspace"], alpha=0.16, lw=0.6)

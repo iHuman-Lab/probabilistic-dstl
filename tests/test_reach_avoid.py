@@ -1,5 +1,6 @@
 """The generic reach-avoid scenario and its two stlpy examples."""
 
+import math
 from functools import reduce
 from types import SimpleNamespace
 
@@ -381,6 +382,20 @@ def test_live_view_and_animation(short):
     score_line = axes[1].lines[0]
     assert score_line.get_label() == f"{RHO_LOWER} (lower bound)"
     assert len(score_line.get_xdata()) == 1
+    # An iterate planned with `select_by: margin` or `last` has no exact
+    # score; the live view must still draw it.
+    observe(
+        1,
+        IterationRecord(
+            result.controls,
+            result.final_loss,
+            float("nan"),
+            None,
+            result.smoothing_beta,
+        ),
+    )
+    assert len(score_line.get_xdata()) == 2
+    assert math.isnan(score_line.get_ydata()[-1])
     finish(result)
     assert len(score_line.get_xdata()) == len(result.hard_lower_history)
     plt.close(fig)
