@@ -4,10 +4,15 @@ The road, traffic, task and limits come from a YAML in
 configs/scenarios/lane/.
 """
 
+import json
 import logging
+import platform
+from collections import Counter
 from pathlib import Path
+from time import perf_counter
 from typing import NamedTuple
 
+import numpy as np
 import torch
 
 from models.estimation import observe_gaussian, sample_gaussian
@@ -18,14 +23,17 @@ from planning.environment import (
     lane_deadline_missed,
     lane_goal_reached,
     lane_has_collision,
+    lane_headway_overlap,
     lane_headway_violated,
+    lane_lead_gap,
     lane_local_window,
     lane_target_contains,
+    lane_traffic_acceleration,
     lane_yield_contains,
     lane_yield_possible,
     lane_yield_reached,
 )
-from planning.runners import output_path, setup_problem
+from planning.runners import output_path, save_result, setup_problem
 from utils import load_config
 
 logger = logging.getLogger(__name__)
@@ -145,6 +153,7 @@ def run(
     stem = Path(config_path).stem
     if show or save:
         _present(result, s, stem=stem, show=show, save=save)
+    save_result(result, stem, save)
     return result
 
 
@@ -186,9 +195,9 @@ def trial(
     acceleration = s.cfg["accel_bounds"]
     accel_bounds = (acceleration["longitudinal"], acceleration["lateral"])
     names = [car["name"] for car in s.cfg["traffic"]]
-    result = s.planner.run_receding_horizon(
-        initial_state,
-        make_rollout=lambda state, step: lane_rollout(
+
+    def rollout_at(state, step):
+        return lane_rollout(
             s.dyn,
             state[0],
             state[1],
@@ -198,10 +207,18 @@ def trial(
             names,
             s.cfg["speed_bounds"],
             accel_bounds,
-        ),
-        make_spec=lambda state, step: _specification(
-            s, make_spec, state, step
-        ),
+        )
+
+    def spec_at(state, step):
+        return _specification(s, make_spec, state, step)
+
+    started = perf_counter()
+    first_guess = best_first_guess(s, initial_state, rollout_at, spec_at)
+    search_time = perf_counter() - started
+    result = s.planner.run_receding_horizon(
+        initial_state,
+        make_rollout=rollout_at,
+        make_spec=spec_at,
         execute=_executor(
             s,
             traffic_q,
@@ -214,7 +231,7 @@ def trial(
         ),
         is_done=_outcome(s),
         max_steps=s.cfg["T_SIM"] if max_steps is None else max_steps,
-        init_guess=initial_controls(s),
+        init_guess=first_guess,
         verbose=verbose,
         on_step=on_step,
         on_iteration=on_iteration,
@@ -223,6 +240,7 @@ def trial(
     )
     if result.stopped_reason == "max_steps":
         result.stopped_reason = "step_limit"
+    result.warm_start_search_time = search_time
     return result
 
 
@@ -255,9 +273,13 @@ def initial_state_of(s, *, generator=None):
     )
 
 
-def initial_controls(s):
-    """The scenario's configured first-window control guess."""
-    warm = s.cfg["warm_start"]
+def initial_controls(s, warm=None):
+    """Controls for one warm start (default: the first configured one).
+
+    A warm start holds one longitudinal acceleration and steers `lateral`
+    for `switch_step` steps, then `-lateral` for as long, then straight.
+    """
+    warm = s.cfg["warm_starts"][0] if warm is None else warm
     controls = torch.zeros(
         s.cfg["H"], 2, dtype=s.dyn.B.dtype, device=s.dyn.device
     )
@@ -266,6 +288,30 @@ def initial_controls(s):
     controls[:switch, 1] = warm["lateral"]
     controls[switch : 2 * switch, 1] = -warm["lateral"]
     return controls
+
+
+def best_first_guess(s, state, rollout_at, spec_at):
+    """Solve the first window from every warm start; return the best plan.
+
+    "Best" is the highest exact lower score, then the highest smooth score
+    (so two plans that both score 0 are still told apart). On a full tie the
+    earlier warm start wins, so the YAML order states the preference openly.
+    This search runs once before the loop, outside any replanning time.
+    """
+    best, best_score = None, None
+    for warm in s.cfg["warm_starts"]:
+        try:
+            plan = s.planner.optimize_window(
+                rollout_at(state, 0),
+                spec=spec_at(state, 0),
+                init_guess=initial_controls(s, warm),
+            )
+        except (RuntimeError, ValueError):
+            continue  # the loop itself reports a window it cannot plan
+        score = (plan.hard_interval[0], plan.smooth_lower)
+        if best is None or score > best_score:
+            best, best_score = plan, score
+    return initial_controls(s) if best is None else best.controls
 
 
 def success_counter(environment, mean, counter):
@@ -338,6 +384,7 @@ def _executor(
         ego_true = s.dyn.A @ state.ego_true + s.dyn.B @ control
         ego_true = ego_true + draw(ego_disturbances, step, ego_true, s.dyn.Q)
         traffic_true = state.traffic_true @ s.dyn.A.T
+        traffic_true = traffic_true + _scripted_braking(s, state, step)
         traffic_true = traffic_true + draw(
             traffic_disturbances, step, traffic_true, traffic_q
         )
@@ -416,6 +463,21 @@ def _executor(
     return execute
 
 
+def _scripted_braking(s, state, step):
+    """Position/velocity change from configured brakes; never reverses."""
+    dt = s.cfg["dt"]
+    accel = torch.tensor(
+        lane_traffic_acceleration(s.cfg["traffic"], step * dt),
+        dtype=state.traffic_true.dtype,
+        device=state.traffic_true.device,
+    )
+    accel = torch.maximum(accel, -state.traffic_true[:, 2].clamp(min=0) / dt)
+    change = torch.zeros_like(state.traffic_true)
+    change[:, 0] = 0.5 * accel * dt**2
+    change[:, 2] = accel * dt
+    return change
+
+
 def _latch(s, completed, mean, step, counter):
     """The step the dwell task first finished, kept once it has."""
     if completed is not None:
@@ -484,12 +546,19 @@ def _outcome(s):
 
 
 def _merged_outcome(s, state, step):
-    """Keep monitoring truth throughout the post-merge settling interval."""
+    """Truth after the dwell: stay in the lane, settle by the merge deadline.
+
+    The spec lets the dwell finish as late as the window allows and only
+    asks for low lateral speed after that, so an unsettled car is a failure
+    only once the window's last finish time has passed.
+    """
     task = s.env.metadata["task"]
     if not lane_target_contains(s.env.metadata, state.ego_true):
         return "lane_retention_violation"
-    if bool(state.ego_true[3].abs() > task["settle_lateral_speed"]):
-        return "settling_violation"
+    settled = bool(state.ego_true[3].abs() <= task["settle_lateral_speed"])
+    if not settled:
+        late = step >= task["start_end_steps"][1]
+        return "settling_violation" if late else None
     if step < state.true_completed + task["settle_steps"]:
         return None
     return "success"
@@ -508,6 +577,13 @@ def _specification(s, factory, state, step):
         yielded = state.yield_completed is not None and (
             state.completed is None or state.yield_completed < state.completed
         )
+        if missed and (
+            lane_target_contains(s.env.metadata, state.ego_mean)
+            or not lane_yield_possible(s.env, step, state.yield_streak)
+        ):
+            # Already in the lane, or nothing left to yield to: plan to stay.
+            # The physical monitor still decides success or failure.
+            completed, missed = True, False
     elif missed:
         # An expired estimated window leaves only lane retention to plan;
         # the separate physical monitor still decides success or failure.
@@ -526,3 +602,170 @@ def _specification(s, factory, state, step):
         if factory is not None
         else environment.get_specification(s.cfg["H"])
     )
+
+
+# --- Results -----------------------------------------------------------------
+
+
+def summarize(result, env, dt):
+    """One run's outcome, safety margins, scores and timings, by name.
+
+    Physical values come from the true states. Times are in milliseconds;
+    "replan" times cover building the spec and solving one window.
+    """
+    ego = np.asarray(
+        [state.ego_true[:2].cpu().numpy() for state in result.states]
+    )
+    traffic = np.asarray(
+        [state.traffic_true[:, :2].cpu().numpy() for state in result.states]
+    )
+    vehicle = env.metadata["ego_vehicle"]
+    half_extents = np.asarray(
+        [
+            [
+                (vehicle["width"] + car["width"]) / 2,
+                (vehicle["height"] + car["height"]) / 2,
+            ]
+            for car in env.metadata["traffic"]
+        ]
+    )
+    # Signed distance between footprints (negative when they overlap).
+    separation = np.abs(traffic - ego[:, None, :]) - half_extents
+    clearance = np.linalg.norm(np.maximum(separation, 0), axis=-1)
+    clearance += np.minimum(separation.max(axis=-1), 0)
+    final = result.states[-1]
+    completion, branch = min(
+        [
+            (step, name)
+            for step, name in [
+                (final.true_completed, "merge"),
+                (final.true_yield_completed, "yield"),
+            ]
+            if step is not None
+        ],
+        default=(None, None),
+    )
+    optimizer = [plan.planning_time * 1000 for plan in result.window_plans]
+    scores = [plan.hard_interval[0] for plan in result.window_plans]
+    alphas = [plan.alpha for plan in result.window_plans]
+    replanning = [plan.replanning_time * 1000 for plan in result.window_plans]
+    if result.failed_replanning_time is not None:
+        replanning.append(result.failed_replanning_time * 1000)
+    later = replanning[1:]
+    rows = {
+        "Outcome": result.stopped_reason.replace("_", " "),
+        "Realized branch": branch,
+        "Completion time [s]": None if completion is None else completion * dt,
+        "Minimum traffic clearance [m]": float(clearance.min()),
+    }
+    if "headway" in env.metadata["task"]:  # reported even when not enforced
+        low, high = lane_headway_overlap(env.metadata)
+        gaps = [
+            lane_lead_gap(env, state.ego_true, state.traffic_true)
+            for state in result.states
+            if low <= state.ego_true[1] <= high
+        ]
+        rows["Minimum lead gap in lane [m]"] = min(gaps) if gaps else None
+    rows["Lowest window score"] = min(scores) if scores else None
+    if alphas and alphas[0] is not None:
+        rows["Windows meeting alpha"] = float(
+            np.mean([score >= alphas[0] for score in scores])
+        )
+    rows.update(
+        {
+            "Warm-start search [ms]": getattr(
+                result, "warm_start_search_time", 0.0
+            )
+            * 1000,
+            "Optimizer median [ms]": float(np.median(optimizer))
+            if optimizer
+            else None,
+            "First replan [ms]": replanning[0] if replanning else None,
+            "Later replans median [ms]": float(np.median(later))
+            if later
+            else None,
+            "Later replans p95 [ms]": float(np.percentile(later, 95))
+            if later
+            else None,
+            "Later replans maximum [ms]": max(later) if later else None,
+        }
+    )
+    return rows
+
+
+def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
+    """Run one scenario once per seed, without plots, and summarize.
+
+    Args:
+        config_path: Lane YAML.
+        seeds: Seeds to run; each changes the noise draws only.
+        save: Write `outputs/<stem>_batch.json` (per-trial rows + table).
+        budget_ms: Replanning time to compare against (the 0.2 s step).
+        max_steps: Override the configured number of executed steps.
+
+    Returns:
+        (per-trial rows, summary table) as dictionaries.
+    """
+    trials, later = [], []
+    for seed in seeds:
+        cfg = load_config(config_path)
+        cfg["seed"] = int(seed)
+        s = build(cfg)
+        result = trial(s, max_steps=max_steps)
+        row = {"seed": int(seed), **summarize(result, s.env, cfg["dt"])}
+        row["window_scores"] = [
+            p.hard_interval[0] for p in result.window_plans
+        ]
+        row["replan_ms"] = [
+            p.replanning_time * 1000 for p in result.window_plans
+        ]
+        trials.append(row)
+        later += row["replan_ms"][1:]
+        print(f"seed {seed}: {row['Outcome']}", flush=True)
+    completions = [
+        row["Completion time [s]"]
+        for row in trials
+        if row["Completion time [s]"] is not None
+    ]
+    table = {
+        "scenario": Path(config_path).stem,
+        "trials": len(trials),
+        "outcomes": dict(Counter(row["Outcome"] for row in trials)),
+        "completion time median [s]": (
+            float(np.median(completions)) if completions else None
+        ),
+        "minimum clearance [m]": min(
+            row["Minimum traffic clearance [m]"] for row in trials
+        ),
+        "lowest window score": min(
+            (
+                row["Lowest window score"]
+                for row in trials
+                if row["Lowest window score"] is not None
+            ),
+            default=None,
+        ),
+        "first replan median [ms]": float(
+            np.median([row["First replan [ms]"] for row in trials])
+        ),
+        "later replans median [ms]": float(np.median(later)),
+        "later replans p95 [ms]": float(np.percentile(later, 95)),
+        "later replans max [ms]": float(max(later)),
+        f"fraction over {budget_ms:g} ms": float(
+            np.mean([t > budget_ms for t in later])
+        ),
+        "machine": {
+            "cpu": platform.processor() or platform.machine(),
+            "device": str(s.dyn.device),
+            "horizon": cfg["H"],
+            "max_iters": s.planner.cfg["max_iters"],
+        },
+    }
+    for key, value in table.items():
+        print(f"{key}: {value}")
+    if save:
+        path = output_path(f"{Path(config_path).stem}_batch", ".json")
+        path.write_text(
+            json.dumps({"table": table, "trials": trials}, indent=1)
+        )
+    return trials, table

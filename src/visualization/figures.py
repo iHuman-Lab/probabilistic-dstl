@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from matplotlib import patches
 
-from planning.environment import lane_headway_overlap, lane_lead_gap
+from planning.environment import lane_lead_gap
 
 COLORS = {
     "mean": "tab:blue",
@@ -598,17 +598,12 @@ def _plot_execution(result, env, *, dt, save_path, show):
             label="Traffic path" if index == 0 else "_nolegend_",
         )
     _move_obstacle(moving, env, len(result.states) - 1, result.states[-1])
-    ax_map.set_xlim(means[:, 0].min() - 2, means[:, 0].max() + 18)
+    # Frame the ego path and every car's final position.
+    traffic = _np(_traffic_truth(result.states[-1]))[:, 0]
+    right = max(means[:, 0].max() + 18, traffic.max() + 4)
     if "yield" in env.regions:
-        # Show the final traffic too, so the reason for yielding is visible.
-        traffic = _np(_traffic_truth(result.states[-1]))[:, 0]
-        ax_map.set_xlim(
-            right=max(
-                ax_map.get_xlim()[1],
-                env.region("yield").xmax + 2,
-                traffic.max() + 4,
-            )
-        )
+        right = max(right, env.region("yield").xmax + 2)
+    ax_map.set_xlim(min(means[:, 0].min(), traffic.min()) - 4, right)
     elapsed = dt * np.arange(len(means))
     labeled = None
     for second in range(int(np.floor(elapsed[-1])) + 1):
@@ -698,81 +693,22 @@ def _plot_execution(result, env, *, dt, save_path, show):
     return fig, (ax_map, ax_score, ax_control)
 
 
-def _lane_summary(result, env, dt):
-    """Compute the selected run's physical outcomes and observed timings."""
-    ego = np.asarray([_np(state.ego_true)[:2] for state in result.states])
-    traffic = np.asarray(
-        [_np(state.traffic_true)[:, :2] for state in result.states]
-    )
-    vehicle = env.metadata["ego_vehicle"]
-    half_extents = np.asarray(
-        [
-            [
-                (vehicle["width"] + car["width"]) / 2,
-                (vehicle["height"] + car["height"]) / 2,
-            ]
-            for car in env.metadata["traffic"]
-        ]
-    )
-    separation = np.abs(traffic - ego[:, None, :]) - half_extents
-    clearance = np.linalg.norm(np.maximum(separation, 0), axis=-1)
-    clearance += np.minimum(separation.max(axis=-1), 0)
-    final = result.states[-1]
-    completion, branch = min(
-        [
-            (step, name)
-            for step, name in [
-                (final.true_completed, "merge"),
-                (final.true_yield_completed, "yield"),
-            ]
-            if step is not None
-        ],
-        default=(None, None),
-    )
-    optimizer = [plan.planning_time * 1000 for plan in result.window_plans]
-    replanning = [plan.replanning_time * 1000 for plan in result.window_plans]
-    if result.failed_replanning_time is not None:
-        replanning.append(result.failed_replanning_time * 1000)
-    later = replanning[1:]
-    rows = {
-        "Outcome": result.stopped_reason.replace("_", " "),
-        "Realized branch": branch,
-        "Completion time [s]": None if completion is None else completion * dt,
-        "Minimum traffic clearance [m]": float(clearance.min()),
-    }
-    if env.metadata["task"]["spec"] == "headway":
-        low, high = lane_headway_overlap(env.metadata)
-        gaps = [
-            lane_lead_gap(env, state.ego_true, state.traffic_true)
-            for state in result.states
-            if low <= state.ego_true[1] <= high
-        ]
-        rows["Minimum active lead gap [m]"] = min(gaps) if gaps else None
-    rows.update(
-        {
-            "Optimizer median [ms]": float(np.median(optimizer))
-            if optimizer
-            else None,
-            "First replan [ms]": replanning[0] if replanning else None,
-            "Later replans median [ms]": float(np.median(later))
-            if later
-            else None,
-            "Later replans p95 [ms]": float(np.percentile(later, 95))
-            if later
-            else None,
-            "Later replans maximum [ms]": max(later) if later else None,
-        }
-    )
-    return rows
-
-
 def plot_lane_merge(result, env, *, dt, save_path=None, show=False):
-    """Show the combined lane figure and a compact table for this run."""
+    """Show the combined figure, the snapshot figure and a results table."""
+    from experiments.lane import summarize
+
     combined = _plot_execution(
         result, env, dt=dt, save_path=save_path, show=show
     )
+    snapshots = plot_lane_snapshots(
+        result,
+        env,
+        dt=dt,
+        save_path=_sibling(save_path, "snapshots"),
+        show=show,
+    )
     rows = []
-    for label, value in _lane_summary(result, env, dt).items():
+    for label, value in summarize(result, env, dt).items():
         if value is None:
             value = "N/A"
         elif isinstance(value, float):
@@ -790,9 +726,105 @@ def plot_lane_merge(result, env, *, dt, save_path=None, show=False):
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table_path = None
-    if save_path is not None:
-        stem = Path(save_path).with_suffix("")
-        table_path = stem.with_name(f"{stem.name}_table.png")
-    _finish(fig, table_path, show)
-    return {"combined": combined, "table": (fig, ax)}
+    _finish(fig, _sibling(save_path, "table"), show)
+    return {"combined": combined, "snapshots": snapshots, "table": (fig, ax)}
+
+
+def _sibling(save_path, kind):
+    """`outputs/x.png` -> `outputs/x_<kind>.png` (None stays None)."""
+    if save_path is None:
+        return None
+    stem = Path(save_path).with_suffix("")
+    return stem.with_name(f"{stem.name}_{kind}.png")
+
+
+def plot_lane_snapshots(
+    result,
+    env,
+    *,
+    dt,
+    number=5,
+    view=(-60.0, 60.0),
+    save_path=None,
+    show=False,
+):
+    """Top-down panels of the whole scene at evenly spaced moments.
+
+    Every traffic car is drawn at its true position with its name, together
+    with the ego, its path so far and the plan made at that moment.
+
+    Args:
+        result: MPCResult from a lane trial.
+        env: The trial's lane environment.
+        dt: Step length in seconds.
+        number: How many moments to show (always including first and last).
+        view: Longitudinal window around the ego, (behind, ahead) in metres.
+        save_path, show: PNG/PDF output path and interactive display.
+
+    Returns:
+        (figure, axes).
+    """
+    count = len(result.states)
+    steps = sorted({int(k) for k in np.linspace(0, count - 1, number)})
+    path = np.asarray([_np(_ego_truth(state))[:2] for state in result.states])
+    road = env.metadata["road"]
+    headway = "headway" in env.metadata["task"]
+    fig, axes = plt.subplots(
+        len(steps),
+        1,
+        figsize=(11, 1.9 * len(steps) + 0.6),
+        layout="constrained",
+    )
+    axes = np.atleast_1d(axes)
+    for ax, step in zip(axes, steps):
+        state = result.states[step]
+        moving = _draw_environment(ax, env, lane=True)
+        _move_obstacle(moving, env, step, state)
+        cars = _np(_traffic_truth(state))
+        for car, position in zip(env.metadata["traffic"], cars):
+            ax.annotate(
+                car["name"],
+                (position[0], position[1] + car["height"] / 2),
+                xytext=(0, 2),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color=COLORS["traffic"],
+                annotation_clip=True,
+            )
+        ax.plot(
+            *path[: step + 1].T,
+            color=COLORS["executed"],
+            linewidth=1.8,
+            label="Executed",
+        )
+        title = f"t = {step * dt:.1f} s"
+        if step < len(result.window_plans):
+            plan = result.window_plans[step]
+            mean = _np(plan.rollout.aux["mean_trace"])[0]
+            ax.plot(
+                mean[:, 0],
+                mean[:, 1],
+                color=COLORS["planned"],
+                linestyle="--",
+                linewidth=1.3,
+                label="Current plan",
+            )
+            title += f",  plan {RHO_LOWER} = {plan.hard_interval[0]:.2f}"
+        if headway:
+            gap = lane_lead_gap(env, state.ego_true, state.traffic_true)
+            lead = env.metadata["task"]["headway"]["lead_vehicle"]
+            title += f",  gap to {lead} = {gap:.1f} m"
+        _draw_ego_vehicle(ax, env, path[step])
+        ax.set_xlim(path[step, 0] + view[0], path[step, 0] + view[1])
+        ax.set_ylim(road["y_min"] - 0.6, road["y_max"] + 1.4)
+        ax.set_title(title, loc="left", fontsize=10)
+        ax.set_ylabel("y (m)")
+        ax.set_xlabel("")
+    axes[-1].set_xlabel("x (m)")
+    _unique_legend(
+        axes[0], loc="lower right", bbox_to_anchor=(1.0, 1.02), ncol=6
+    )
+    _finish(fig, save_path, show)
+    return fig, axes

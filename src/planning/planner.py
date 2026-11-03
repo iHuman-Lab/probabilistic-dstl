@@ -93,6 +93,10 @@ class Planner:
         beta = self.cfg["margin_beta"]
         if beta is not None and (not math.isfinite(beta) or beta <= 0):
             raise ValueError("margin_beta must be finite and positive or null")
+        if self.cfg["warm_tail"] not in ("repeat", "zero"):
+            raise ValueError("warm_tail must be 'repeat' or 'zero'")
+        if self.cfg["tie_break"] not in ("latest", "smooth"):
+            raise ValueError("tie_break must be 'latest' or 'smooth'")
 
     @property
     def control_dim(self):
@@ -309,7 +313,9 @@ class Planner:
                     "rollout must supply finite gradients to controls"
                 )
             optimizer.step()
-        result_iteration, selected = self._select_candidate(candidates)
+        result_iteration, selected = self._select_candidate(
+            candidates, self.cfg["tie_break"]
+        )
         result = self.evaluate_controls(
             rollout,
             selected.controls,
@@ -325,14 +331,30 @@ class Planner:
         return result
 
     @staticmethod
-    def _select_candidate(candidates):
-        """Highest exact lower bound; the later iterate wins a tie."""
+    def _select_candidate(candidates, tie_break="latest"):
+        """Highest exact lower bound; ties go to the later iterate.
+
+        With tie_break="smooth", equal exact bounds are first separated by
+        the smooth score, so when every iterate scores 0 the least-bad one
+        is kept instead of whichever came last.
+        """
+        if tie_break == "smooth":
+            return max(
+                reversed(candidates),
+                key=lambda c: (c[1].hard_interval[0], c[1].smooth_lower),
+            )
         return max(reversed(candidates), key=lambda c: c[1].hard_interval[0])
 
     @staticmethod
-    def shift_controls(controls):
-        """Drop the executed control and repeat the last one."""
-        return torch.cat((controls[1:], controls[-1:])).detach().clone()
+    def shift_controls(controls, tail="repeat"):
+        """Drop the executed control; repeat the last one or append a zero.
+
+        A zero tail stops a leftover acceleration from being held to the end
+        of the next window (with acceleration controls it holds the speed).
+        """
+        last = controls[-1:]
+        end = torch.zeros_like(last) if tail == "zero" else last
+        return torch.cat((controls[1:], end)).detach().clone()
 
     def run_receding_horizon(
         self,
@@ -398,7 +420,7 @@ class Planner:
             states.append(state)
             applied.append(control)
             plans.append(plan)
-            guess = self.shift_controls(plan.controls)
+            guess = self.shift_controls(plan.controls, self.cfg["warm_tail"])
             reason = is_done(state, step + 1)
             if on_step is not None:
                 on_step(step, state, plan)

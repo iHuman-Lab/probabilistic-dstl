@@ -9,6 +9,7 @@ from utils import skip_run
 REACH_AVOID = "configs/scenarios/reach_avoid"
 LANE = "configs/scenarios/lane"
 LIVE = {"live": True, "optimization_every": 1}  # plot and print each iterate
+LANE_VIEW = {"live_optimization": False}  # True: watch every replan live
 
 # 1. Reach-avoid: one obstacle
 with skip_run("skip", "ReachAvoid") as check, check():
@@ -27,19 +28,38 @@ with skip_run("skip", "EitherOr") as check, check():
 
 # 4. Lane change into the faster lane
 with skip_run("skip", "LaneChange") as check, check():
-    lane.run(f"{LANE}/lane_change.yaml", live_optimization=True)
+    lane.run(f"{LANE}/lane_change.yaml", **LANE_VIEW)
 
 
-# 5. On-ramp merge into the main lane
+# --- On-ramp merge: one scene per STL specification -------------------------
+# Each block shows the run (map, scores, controls), a snapshot figure with
+# every car named, and a results table. LANE_VIEW draws each replan live;
+# the live view slows planning, so leave it off when reading timings.
+
+# 5. A, merge: G safe AND F[window] G[dwell] in_lane, then stay settled.
+#    The lead brakes at 4 s; nothing asks the ego to keep a distance.
 with skip_run("run", "LaneMerge") as check, check():
-    lane.run(f"{LANE}/lane_merge.yaml", live_optimization=True)
+    lane.run(f"{LANE}/lane_merge.yaml", **LANE_VIEW)
 
 
-# 6. Merge with a minimum gap behind the lead vehicle
-with skip_run("run", "LaneHeadway") as check, check():
-    lane.run(f"{LANE}/lane_headway.yaml", live_optimization=True)
+# 6. B, headway: A AND G(touching the main lane -> gap to lead >= 22 m).
+#    Same scene and seed as A; only the rule differs.
+with skip_run("skip", "LaneHeadway") as check, check():
+    lane.run(f"{LANE}/lane_headway.yaml", **LANE_VIEW)
 
 
-# 7. Merge or stop in the yield region
-with skip_run("run", "LaneMergeOrYield") as check, check():
-    lane.run(f"{LANE}/lane_merge_or_yield.yaml", live_optimization=True)
+# 7. C, merge or yield, dense traffic: no gap, so the ego stops on the ramp.
+with skip_run("skip", "LaneMergeOrYield") as check, check():
+    lane.run(f"{LANE}/lane_merge_or_yield.yaml", **LANE_VIEW)
+
+
+# 8. C, merge or yield, one open gap: same rule and ego, so now it merges.
+with skip_run("skip", "LaneMergeOrYieldGap") as check, check():
+    lane.run(f"{LANE}/lane_merge_or_yield_gap.yaml", **LANE_VIEW)
+
+
+# 9. Batch: several seeds per scenario, no plots; prints and saves a table
+#    (outcomes, gaps, scores, replanning times) to outputs/<name>_batch.json.
+with skip_run("skip", "LaneBatch") as check, check():
+    for name in ("merge", "headway", "merge_or_yield", "merge_or_yield_gap"):
+        lane.batch(f"{LANE}/lane_{name}.yaml", seeds=range(5))

@@ -177,8 +177,10 @@ Custom initial states must be `LaneState` records with truth and beliefs.
    (the Fréchet lower bound of a conjunction is 0 until its parts are likely),
    so a gradient method needs a starting path. The route only chooses where to
    start; ρ̲_φ and the Monte Carlo rate evaluate the plan that comes out.
-5. **The lane first-window guess is a hand-shaped manoeuvre** (`warm_start:` in
-   the lane YAMLs), the same kind of choice as item 4.
+5. **The lane first-window guesses are hand-shaped manoeuvres** (`warm_starts:`
+   in the lane YAMLs), the same kind of choice as item 4. The first window is
+   solved from each and the best plan seeds the loop; on a tie the earlier one
+   wins, so the YAML order is the stated preference.
 6. **Lane values are per window and open loop.** Success, collision and the
    other outcomes are sampled closed-loop executions, not guarantees.
 7. **Reproducibility.** Reach–avoid is deterministic; lane and Monte Carlo are
@@ -201,10 +203,33 @@ python src/main.py
 ```
 
 Set the desired block in `src/main.py` to `"run"` and the others to `"skip"`.
-The lane examples are `LaneMerge`, `LaneHeadway`, and `LaneMergeOrYield`.
-Each runs one fixed specification and shows its figure and a compact results
-table. When saving is enabled, only those images (PNG/PDF) go to `outputs/`.
-Timing values describe the selected run; they are not benchmark results.
+The on-ramp merge has one block per STL specification, each its own YAML:
+
+| Block | YAML | Specification | What to look for |
+| --- | --- | --- | --- |
+| `LaneMerge` | `lane_merge.yaml` | A: safe, merge in the window, dwell, stay settled | merges; closes on the braking lead |
+| `LaneHeadway` | `lane_headway.yaml` | B: A + gap to `lead` ≥ 22 m once touching the lane | same scene, keeps the gap |
+| `LaneMergeOrYield` | `lane_merge_or_yield.yaml` | C: A's merge, or stop in the yield region | dense traffic: stops |
+| `LaneMergeOrYieldGap` | `lane_merge_or_yield_gap.yaml` | C, same rule | one open gap: merges |
+| `LaneBatch` | all four | several seeds, no plots | outcome and timing table |
+
+A and B share their scene and seed, as do the two C scenes; only the rule (or
+only the traffic) differs. In A/B the `lead` car brakes at 4 s (`brake:` in
+the YAML); the planner is not told and replans from measurements. Each run
+shows the run figure, a snapshot figure naming every car, and a results
+table, and saves them with the `.pt` result in `outputs/`. Leave
+`LANE_VIEW` live drawing off when reading timings: drawing runs inside the
+replanning timer. `lane.batch` saves `outputs/<name>_batch.json`.
+
+Two planner settings keep the closed loop steady; the lane YAMLs set both
+(defaults elsewhere are unchanged):
+
+- `warm_tail: zero`: each new window's guess ends in a zero control instead of
+  repeating the last one, so a leftover acceleration is not held to the end of
+  the next plan (it was the cause of mid-merge score dips).
+- `tie_break: smooth`: if several iterates share the best exact score (often
+  all 0 after a surprise), keep the one with the best smooth score instead of
+  the last one.
 
 ## Development checks
 

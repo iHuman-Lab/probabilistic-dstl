@@ -1,7 +1,8 @@
-# Lane merge: merge from the on-ramp before it ends, past three vehicles.
+# A, merge: G safe AND F[window] G[dwell] in_lane, then stay settled.
+# Paired with lane_headway.yaml: same scene and seed, no headway rule.
 dynamics: double_integrator
 H: 30
-T_SIM: 40
+T_SIM: 45
 seed: 2
 dt: 0.2
 u_max: 2.5
@@ -13,36 +14,51 @@ observation:
   ego_std: [0.1, 0.1, 0.1, 0.1]
   traffic_std: [0.1, 0.1, 0.1, 0.1]
 
-# Road and traffic configuration
+# Road and traffic. `lead` brakes at 4 s and the cars behind follow at 5 s;
+# the planner is not told: it predicts constant speeds and replans from the
+# measurements.
 road: {y_min: -1.8, y_max: 5.4, lane_divider: 1.8}
 ramp: {start_x: 28.0, end_x: 72.0}
-goal: {x_range: [-10.0, 150.0], y_range: [1.8, 5.4]}
+goal: {x_range: [-10.0, 200.0], y_range: [1.8, 5.4]}
 ego_vehicle: {width: 4.5, height: 1.8}
 traffic:
-  - {name: lead, x0: 42.0, y: 3.6, speed: 20.0, width: 4.5, height: 1.8}
-  - {name: target_front, x0: 70.0, y: 3.6, speed: 21.0, width: 4.5, height: 1.8}
-  - {name: target_rear, x0: -18.0, y: 3.6, speed: 17.0, width: 4.5, height: 1.8}
+  - {name: lead, x0: 30.0, y: 3.6, speed: 14.0, width: 4.5, height: 1.8,
+     brake: {at: 4.0, duration: 2.0, decel: 2.0}}
+  - {name: lead_2, x0: 60.0, y: 3.6, speed: 15.0, width: 4.5, height: 1.8}
+  - {name: lead_3, x0: 90.0, y: 3.6, speed: 16.0, width: 4.5, height: 1.8}
+  - {name: rear, x0: -30.0, y: 3.6, speed: 14.5, width: 4.5, height: 1.8,
+     brake: {at: 5.0, duration: 2.0, decel: 2.0}}
+  - {name: rear_2, x0: -55.0, y: 3.6, speed: 14.5, width: 4.5, height: 1.8,
+     brake: {at: 5.0, duration: 2.0, decel: 2.0}}
 traffic_q_std: 0.005
 traffic_cov_scale: 0.01
 safety_margin: {longitudinal: 0.5, lateral: 0.2}
 task:
   spec: merge
+  # Bumper gap to `lead` (~1.6 s at 14 m/s; 24 m leaves no time to merge).
+  # Only the headway spec enforces it; the merge spec carries it so its
+  # figures and table report the same gap.
+  headway: {lead_vehicle: lead, min_gap: 22.0}
   target_center: 3.6
   target_tolerance: 1.2
   start_window_seconds: [2.5, 5.0]
   dwell_seconds: 1.0
-  settle_seconds: 1.0         # keep running after the dwell to show settling
+  settle_seconds: 4.0         # keep driving after the dwell to see reactions
   settle_lateral_speed: 0.3   # |vy| bound [m/s] once in the target lane
 speed_bounds: [0.0, 25.0]
 accel_bounds:
   longitudinal: [-2.5, 2.5]
   lateral: [-2.0, 2.0]
 
-# Planner configuration
-warm_start: {longitudinal: 0.5, lateral: 0.9, switch_step: 10}
+# Planner. The first window is solved from each warm start and the best plan
+# seeds the loop; here one guess: brake gently and steer into the lane.
+warm_starts:
+  - {longitudinal: -1.0, lateral: 0.9, switch_step: 10}
 planner:
   w_u: 0.002
   w_du: 0.005
   w_phi: 100.0
   max_iters: 15
   alpha: 0.95
+  warm_tail: zero     # next guess ends in zero acceleration
+  tie_break: smooth   # if every iterate scores 0, keep the least bad
