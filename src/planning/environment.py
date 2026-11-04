@@ -494,7 +494,21 @@ def lane_subformulas(environment, horizon):
 
 
 def _lane_merge_task(metadata, horizon, target, settled):
-    """Existing merge/dwell/retention branch, also used unchanged by C."""
+    """The merge/dwell/retention branch, also used unchanged by C.
+
+    Before any dwell credit the branch is
+    F[start, latest] (G[0,d] lane AND G[d,d] before_end
+                      AND G[d,inf) (lane AND settled)).
+
+    Args:
+        metadata: Lane metadata of the local window (step, streak, task).
+        horizon: Last step of the planning window.
+        target: Target-lane occupancy predicate.
+        settled: Lateral-speed predicate.
+
+    Returns:
+        Dict with "complete", "stay" and "branch" formulas.
+    """
     task = metadata["task"]
     step = metadata.get("step", 0)
     streak = metadata.get("streak", 0)
@@ -528,27 +542,33 @@ def _lane_merge_task(metadata, horizon, target, settled):
             formula = formula & Always(before_end, [finish, finish])
         return formula, finish
 
-    if credit:
-        remaining = dwell - (credit - 1)
-        if step + remaining > absolute_end:
-            raise ValueError("lane task has no remaining feasible dwell start")
-        # Already in the lane: the dwell may finish at its earliest step or
-        # at any later one up to the deadline, as long as the car stays in.
-        candidates = [
-            completion_from_start(0, finish)
-            for finish in range(
-                remaining, min(absolute_end - step, horizon) + 1
-            )
-        ]
-    else:
+    if not credit:
+        # Not in the lane yet: one Eventually over the dwell start s, with
+        # the same conjunction grouping as one candidate per s, so the exact
+        # lower bound is the same max over starts. G[d, inf) runs to the
+        # trace end, which is the horizon end.
         start = max(0, absolute_start - step)
         latest_start = absolute_end - dwell - step
         if latest_start < start:
             raise ValueError("lane task has no remaining feasible dwell start")
-        candidates = [
-            completion_from_start(candidate, dwell)
-            for candidate in range(start, latest_start + 1)
-        ]
+        starts = [start, latest_start]
+        completion, _finish = completion_from_start(0, dwell)
+        stay = Always(target & settled, [dwell, np.inf])
+        return {
+            "complete": Eventually(completion, starts),
+            "stay": Eventually(stay, starts),
+            "branch": Eventually(completion & stay, starts),
+        }
+    remaining = dwell - (credit - 1)
+    if step + remaining > absolute_end:
+        raise ValueError("lane task has no remaining feasible dwell start")
+    # Already in the lane: the dwell may finish at its earliest step or at any
+    # later one up to the deadline, as long as the car stays in. The lane must
+    # hold from now to a variable finish, so this stays an Or over finishes.
+    candidates = [
+        completion_from_start(0, finish)
+        for finish in range(remaining, min(absolute_end - step, horizon) + 1)
+    ]
     completion = reduce(Or, [formula for formula, _finish in candidates])
     stay = reduce(Or, [stay_from(finish) for _formula, finish in candidates])
     # Safety covers the whole window, not just up to the dwell finish, so
