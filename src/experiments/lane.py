@@ -696,6 +696,9 @@ def summarize(result, env, dt):
 def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
     """Run one scenario once per seed, without plots, and summarize.
 
+    One unrecorded one-step trial of the first seed runs first, so CUDA
+    kernel loading is not timed in the first replan (harmless on CPU).
+
     Args:
         config_path: Lane YAML.
         seeds: Seeds to run; each changes the noise draws only.
@@ -706,11 +709,12 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
     Returns:
         (per-trial rows, summary table) as dictionaries.
     """
+    seeds = [int(seed) for seed in seeds]
+    trial(_seeded(config_path, seeds[0]), max_steps=1)  # warm-up, not kept
     trials, later = [], []
     for seed in seeds:
-        cfg = load_config(config_path)
-        cfg["seed"] = int(seed)
-        s = build(cfg)
+        s = _seeded(config_path, seed)
+        cfg = s.cfg
         result = trial(s, max_steps=max_steps)
         row = {"seed": int(seed), **summarize(result, s.env, cfg["dt"])}
         row["window_scores"] = [
@@ -722,6 +726,9 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
         trials.append(row)
         later += row["replan_ms"][1:]
         print(f"seed {seed}: {row['Outcome']}", flush=True)
+    branches = Counter(row["Realized branch"] or "none" for row in trials)
+    alpha = s.planner.cfg["alpha"]
+    scores = [score for row in trials for score in row["window_scores"]]
     completions = [
         row["Completion time [s]"]
         for row in trials
@@ -731,6 +738,9 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
         "scenario": Path(config_path).stem,
         "trials": len(trials),
         "outcomes": dict(Counter(row["Outcome"] for row in trials)),
+        "branches": {
+            name: branches[name] for name in ("merge", "yield", "none")
+        },
         "completion time median [s]": (
             float(np.median(completions)) if completions else None
         ),
@@ -753,6 +763,11 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
             ),
             default=None,
         ),
+        "windows meeting alpha": (
+            None
+            if alpha is None
+            else float(np.mean([score >= alpha for score in scores]))
+        ),
         "first replan median [ms]": float(
             np.median([row["First replan [ms]"] for row in trials])
         ),
@@ -762,12 +777,7 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
         f"fraction over {budget_ms:g} ms": float(
             np.mean([t > budget_ms for t in later])
         ),
-        "machine": {
-            "cpu": platform.processor() or platform.machine(),
-            "device": str(s.dyn.device),
-            "horizon": cfg["H"],
-            "max_iters": s.planner.cfg["max_iters"],
-        },
+        "machine": _machine(s),
     }
     for key, value in table.items():
         print(f"{key}: {value}")
@@ -777,6 +787,46 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
             json.dumps({"table": table, "trials": trials}, indent=1)
         )
     return trials, table
+
+
+def _seeded(config_path, seed):
+    """Build one lane config with its seed replaced.
+
+    Args:
+        config_path: Lane YAML.
+        seed: Seed for the trial's noise draws.
+
+    Returns:
+        The built problem (see `build`).
+    """
+    cfg = load_config(config_path)
+    cfg["seed"] = seed
+    return build(cfg)
+
+
+def _machine(s):
+    """Hardware and planner settings the batch timings depend on.
+
+    Args:
+        s: A built lane problem.
+
+    Returns:
+        Dict with CPU, device, GPU name (None off CUDA), torch version,
+        horizon H and the planner's max_iters.
+    """
+    device = torch.device(s.dyn.device)
+    return {
+        "cpu": platform.processor() or platform.machine(),
+        "device": str(device),
+        "gpu": (
+            torch.cuda.get_device_name(device)
+            if device.type == "cuda"
+            else None
+        ),
+        "torch": torch.__version__,
+        "H": s.cfg["H"],
+        "max_iters": s.planner.cfg["max_iters"],
+    }
 
 
 # --- Paper outputs -------------------------------------------------------------
@@ -845,18 +895,22 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
 def latex_table(scenes=TABLE_SCENES, *, save=True):
     """A LaTeX tabular from saved batch results (run `batch` per scene first).
 
-    Columns: completed trials, closest traffic clearance, closest lead gap,
-    lowest window score, and replanning median / p95 in milliseconds.
+    Columns: completed trials, merged/yielded trials, closest traffic
+    clearance, closest lead gap, lowest window score, percent of windows with
+    score >= alpha, and later replanning median / p95 in milliseconds. The
+    first-replan medians go in a LaTeX comment under the table.
     """
     lines = [
-        r"\begin{tabular}{lccccc}",
+        r"\begin{tabular}{lccccccc}",
         r"\toprule",
         (
-            r"Scene & Completed & Clearance (m) & Lead gap (m) & "
-            r"Lowest $\underline{\rho}$ & Replan med./p95 (ms) \\"
+            r"Scene & Completed & Merged/yielded & Clearance (m) & "
+            r"Lead gap (m) & Lowest $\underline{\rho}$ & "
+            r"$\underline{\rho} \geq \alpha$ (\%) & Replan med./p95 (ms) \\"
         ),
         r"\midrule",
     ]
+    first = []
     for name, row_name in scenes:
         path = output_path(f"lane_{name}_batch", ".json")
         table = json.loads(path.read_text())["table"]
@@ -867,15 +921,24 @@ def latex_table(scenes=TABLE_SCENES, *, save=True):
         )
         gap = table.get("minimum lead gap in lane [m]")
         lowest = table["lowest window score"]
+        meeting = table["windows meeting alpha"]
+        branches = table["branches"]
         lines.append(
             f"{row_name} & {done}/{table['trials']} & "
+            f"{branches['merge']}/{branches['yield']} & "
             f"{table['minimum clearance [m]']:.1f} & "
             f"{'--' if gap is None else f'{gap:.1f}'} & "
             f"{'--' if lowest is None else f'{lowest:.2f}'} & "
+            f"{'--' if meeting is None else f'{100 * meeting:.1f}'} & "
             f"{table['later replans median [ms]']:.0f} / "
             f"{table['later replans p95 [ms]']:.0f} \\\\"
         )
-    lines += [r"\bottomrule", r"\end{tabular}"]
+        first.append(f"{row_name} {table['first replan median [ms]']:.0f} ms")
+    lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        f"% first replan median: {', '.join(first)}",
+    ]
     text = "\n".join(lines)
     if save:
         output_path("lane_table", ".tex").write_text(text + "\n")

@@ -1,5 +1,6 @@
 """Lane change and merge: semantics, planning, and figures."""
 
+from functools import reduce
 from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
@@ -11,7 +12,8 @@ from matplotlib import colors
 from experiments import lane
 from models.beliefs import GaussianBeliefTrajectory
 from models.rollouts import LaneBeliefTrajectory, lane_rollout
-from pdstl.predicates import AxisInterval, RelativeAxisInterval
+from pdstl.operators import Always, Or
+from pdstl.predicates import AxisInterval, LessThan, RelativeAxisInterval
 from planning.environment import (
     build_lane_merge_environment,
     lane_contains_footprint,
@@ -1052,18 +1054,107 @@ def test_credited_dwell_may_finish_later_so_settling_can_follow():
     assert branch.probability_interval(beliefs)[0] == 1
 
 
+def _or_over_starts_branch(metadata, horizon):
+    """The merge branch as built before the Eventually form: one Or per start.
+
+    Args:
+        metadata: Lane metadata of an uncredited local window.
+        horizon: Last step of the planning window.
+
+    Returns:
+        OR_s (G[s,s+d] lane AND G[s+d,s+d] before_end
+              AND G[s+d,H] (lane AND settled)).
+    """
+    task = metadata["task"]
+    step, dwell = metadata["step"], task["dwell_steps"]
+    first, deadline = task["start_end_steps"]
+    center, tolerance = task["target_center"], task["target_tolerance"]
+    target = AxisInterval(center - tolerance, center + tolerance, dim=1)
+    speed = task["settle_lateral_speed"]
+    settled = AxisInterval(-speed, speed, dim=3)
+    front = metadata["ramp"]["end_x"] - metadata["ego_vehicle"]["width"] / 2
+    before_end = LessThan(front, dim=0)
+    candidates = []
+    for start in range(max(0, first - step), deadline - dwell - step + 1):
+        finish = start + dwell
+        completion = Always(target, [start, finish]) & Always(
+            before_end, [finish, finish]
+        )
+        candidates.append(
+            completion & Always(target & settled, [finish, horizon])
+        )
+    return reduce(Or, candidates)
+
+
+@pytest.mark.parametrize("step", [0, 6, 14])
+def test_merge_eventually_has_the_or_over_starts_lower_bound(step):
+    env = build_lane_merge_environment(
+        load_config("configs/scenarios/lane/lane_merge.yaml")
+    )
+    task, horizon = env.metadata["task"], 30
+    window = lane_local_window(env, step)
+    new = lane_subformulas(window, horizon)["branch"]
+    old = _or_over_starts_branch(window.metadata, horizon)
+    generator = torch.Generator().manual_seed(step)
+    steps, cars = horizon + 1, len(env.metadata["traffic"])
+    lowers = []
+    for _ in range(24):
+        # Ego crosses into the lane at a random step, at a random speed.
+        cross = int(torch.randint(0, steps, (1,), generator=generator))
+        speed = 1.5 + 1.5 * torch.rand(1, generator=generator)
+        ego = torch.zeros(1, steps, 4)
+        ego[0, :, 0] = speed * torch.arange(steps)
+        ego[0, cross:, 1] = task["target_center"]
+        ego[..., 1] += 0.4 * torch.randn(1, steps, generator=generator)
+        ego[..., 3] = 0.3 * torch.randn(1, steps, generator=generator)
+        variance = 0.01 + 0.3 * torch.rand(1, steps, 4, generator=generator)
+        beliefs = LaneBeliefTrajectory(
+            ego,
+            torch.diag_embed(variance),
+            torch.full((1, steps, cars, 4), -100.0),
+            torch.zeros(1, steps, cars, 4, 4),
+            [car["name"] for car in env.metadata["traffic"]],
+        )
+        lower, upper = new.probability_interval(beliefs).tolist()
+        assert lower == pytest.approx(
+            old.probability_interval(beliefs)[0].item(), abs=1e-6
+        )
+        assert upper >= lower
+        lowers.append(lower)
+    assert max(lowers) > 0.1  # the comparison is not only zeros
+
+
+@pytest.mark.parametrize("alpha", [0.95, None])
 def test_batch_runs_each_seed_and_saves_one_table(
-    lane_config, tmp_path, monkeypatch
+    lane_config, tmp_path, monkeypatch, alpha
 ):
     from planning import runners
 
-    _cfg, path = lane_config
+    cfg, path = lane_config
+    cfg["planner"]["alpha"] = alpha
+    path.write_text(yaml.safe_dump(cfg))
     monkeypatch.setattr(runners, "RESULTS_DIR", tmp_path)
     trials, table = lane.batch(str(path), seeds=[0, 1], max_steps=2)
     assert [row["seed"] for row in trials] == [0, 1]
     assert table["trials"] == 2
     assert sum(table["outcomes"].values()) == 2
     assert len(trials[0]["replan_ms"]) == len(trials[0]["window_scores"])
+    # Branch counts cover every trial; None is stored as "none".
+    assert set(table["branches"]) == {"merge", "yield", "none"}
+    assert sum(table["branches"].values()) == 2
+    # Fraction over all windows of all trials, not a mean of trial means.
+    scores = trials[0]["window_scores"] + trials[1]["window_scores"]
+    expected = (
+        None
+        if alpha is None
+        else sum(score >= alpha for score in scores) / len(scores)
+    )
+    assert table["windows meeting alpha"] == pytest.approx(expected)
+    machine = table["machine"]
+    assert machine["torch"] == torch.__version__
+    assert machine["H"] == cfg["H"]
+    assert machine["max_iters"] == cfg["planner"]["max_iters"]
+    assert (machine["gpu"] is None) == (machine["device"] == "cpu")
     saved = (tmp_path / "lane_change_batch.json").read_text()
     assert '"table"' in saved and '"trials"' in saved
 
@@ -1105,18 +1196,33 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     for name, _row in lane.TABLE_SCENES:
         table = {
             "trials": 5,
-            "outcomes": {"success": 4, "collision": 1},
+            "outcomes": {"success": 3, "yielded": 1, "collision": 1},
+            "branches": {"merge": 3, "yield": 1, "none": 1},
             "minimum clearance [m]": 3.21,
             "minimum lead gap in lane [m]": None,
             "lowest window score": 0.9,
+            "windows meeting alpha": 0.98765,
+            "first replan median [ms]": 512.4,
             "later replans median [ms]": 120.0,
             "later replans p95 [ms]": 180.0,
         }
+        if name == "merge":
+            table["windows meeting alpha"] = None  # alpha not set
         path = tmp_path / f"lane_{name}_batch.json"
         path.write_text(json.dumps({"table": table, "trials": []}))
     text = lane.latex_table()
-    assert text.startswith(r"\begin{tabular}")
-    assert "Merge + headway & 4/5 & 3.2 & -- & 0.90 & 120 / 180" in text
+    assert text.startswith(r"\begin{tabular}{lccccccc}")
+    assert r"Merged/yielded" in text
+    assert r"$\underline{\rho} \geq \alpha$ (\%)" in text
+    assert (
+        "Merge + headway & 4/5 & 3/1 & 3.2 & -- & 0.90 & 98.8 & 120 / 180"
+        in text
+    )
+    assert "Merge & 4/5 & 3/1 & 3.2 & -- & 0.90 & -- & 120 / 180" in text
+    # The first-replan median is a comment under the table, not a column.
+    last = text.splitlines()[-1]
+    assert last.startswith("% first replan median: Merge 512 ms")
+    assert text.index(r"\end{tabular}") < text.index(last)
     assert (tmp_path / "lane_table.tex").exists()
     with pytest.raises(FileNotFoundError, match="run lane_merge.yaml"):
         lane.paper_figure()
