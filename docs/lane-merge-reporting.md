@@ -1,7 +1,9 @@
 # Lane merge: tasks for the paper results
 
-Branch: `lane-merge-clean`. Read `docs/lane-merge-plan.md` and the README
-section "Lane change and merge" first. Work in the order below; each task
+Branch: `lane-merge-clean`. All lane work stays on this branch for now: do
+not merge it with `experiments/two-gap` or into `opt-planning`, and do not
+pull changes from those branches. Read `docs/lane-merge-plan.md` and the
+README section "Lane change and merge" first. Work in the order below; each task
 lists what to change, the checks it must pass, and what not to do.
 
 ## What the paper needs from this experiment
@@ -127,20 +129,6 @@ Compare the GPU replan median and p95 with the 0.2 s step:
 
 Write the result as two sentences at the end of the PR description; the
 author puts them in the paper.
-
-## Task 6: merging with `experiments/two-gap`
-
-Both branches add planner settings. When both land in `opt-planning`,
-expect conflicts in `configs/planning.yaml`, `src/planning/planner.py` and
-`tests/test_planner.py`. Resolve by keeping both sets:
-
-- `planning.yaml`: keep `select_by`, `score_threshold` (two-gap) and
-  `warm_tail`, `tie_break` (lane).
-- `Planner._select_candidate`: two-gap's version takes a `threshold`; add
-  this branch's `tie_break` as one more keyword so a tie on the exact lower
-  bound is broken by `smooth_lower` when `tie_break == "smooth"`.
-- Keep both sets of tests; run the full suite (`pytest -q`, including
-  `-m slow`) after resolving.
 
 ## Done when
 
