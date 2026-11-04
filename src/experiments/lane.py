@@ -782,19 +782,34 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
 # --- Paper outputs -------------------------------------------------------------
 
 LANE_DIR = "configs/scenarios/lane"
-PAPER_SCENES = (
-    ("merge", "(a) Merge: □safe ∧ ◇□in-lane (1 s dwell in window), settle"),
-    ("headway", "(b) Headway: (a) ∧ □(in-lane → gap to lead ≥ 22 m)"),
-    ("merge_or_yield", "(c) Dense: □safe ∧ (merge ∨ ◇□stopped)"),
-    ("merge_or_yield_gap", "(d) One gap open: same rule as (c)"),
+# Scenes drawn in the paper figure: the first full width, the rest side by
+# side. Headway looks like the merge strip, so it is reported in the table.
+FIGURE_SCENES = (
+    (
+        "merge",
+        (
+            "(a) Merge: □safe ∧ ◇□in-lane (1 s dwell in window), settle;"
+            " the lead brakes at 4 s"
+        ),
+    ),
+    ("merge_or_yield", "(b) Dense: □safe ∧ (merge ∨ ◇□stopped)"),
+    ("merge_or_yield_gap", "(c) One gap open: same rule as (b)"),
+)
+# Rows of the paper table (scene, row name).
+TABLE_SCENES = (
+    ("merge", "Merge"),
+    ("headway", "Merge + headway"),
+    ("merge_or_yield", "Merge or yield, dense"),
+    ("merge_or_yield_gap", "Merge or yield, gap"),
 )
 
 
-def paper_figure(scenes=PAPER_SCENES, *, save=True, show=False):
+def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
     """The compact full-width lane figure from saved runs.
 
     Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
-    Writes outputs/lane_paper.pdf and .png and returns (figure, axes).
+    The first scene is drawn full width, the next two side by side. Writes
+    outputs/lane_paper.pdf and .png and returns (figure, axes).
     """
     from visualization.figures import plot_lane_paper
 
@@ -807,18 +822,18 @@ def paper_figure(scenes=PAPER_SCENES, *, save=True, show=False):
         result = torch.load(path, weights_only=False)
         runs.append((title, result, build_lane_merge_environment(cfg)))
         dt = cfg["dt"]
-        if name == "headway":
-            brake = next(
-                (
-                    car["brake"]["at"]
-                    for car in cfg["traffic"]
-                    if car["name"] == cfg["task"]["headway"]["lead_vehicle"]
-                    and "brake" in car
-                ),
-                None,
-            )
+        lead = cfg["task"].get("headway", {}).get("lead_vehicle")
+        brake = brake or next(
+            (
+                car["brake"]["at"]
+                for car in cfg["traffic"]
+                if car["name"] == lead and "brake" in car
+            ),
+            None,
+        )
     return plot_lane_paper(
-        runs,
+        runs[:1],
+        runs[1:],
         dt=dt,
         brake_time=brake,
         save_path=output_path("lane_paper", ".pdf") if save else None,
@@ -826,7 +841,7 @@ def paper_figure(scenes=PAPER_SCENES, *, save=True, show=False):
     )
 
 
-def latex_table(scenes=PAPER_SCENES, *, save=True):
+def latex_table(scenes=TABLE_SCENES, *, save=True):
     """A LaTeX tabular from saved batch results (run `batch` per scene first).
 
     Columns: completed trials, closest traffic clearance, closest lead gap,
@@ -841,7 +856,7 @@ def latex_table(scenes=PAPER_SCENES, *, save=True):
         ),
         r"\midrule",
     ]
-    for name, title in scenes:
+    for name, row_name in scenes:
         path = output_path(f"lane_{name}_batch", ".json")
         table = json.loads(path.read_text())["table"]
         done = sum(
@@ -852,7 +867,7 @@ def latex_table(scenes=PAPER_SCENES, *, save=True):
         gap = table.get("minimum lead gap in lane [m]")
         lowest = table["lowest window score"]
         lines.append(
-            f"{title.split(':')[0]} & {done}/{table['trials']} & "
+            f"{row_name} & {done}/{table['trials']} & "
             f"{table['minimum clearance [m]']:.1f} & "
             f"{'--' if gap is None else f'{gap:.1f}'} & "
             f"{'--' if lowest is None else f'{lowest:.2f}'} & "

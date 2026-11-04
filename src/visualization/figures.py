@@ -990,7 +990,7 @@ def _paper_strip(ax, title, result, env, dt, xlim, ylim, brake_time=None):
                 number,
                 alpha=shade,
                 edge="black" if is_lead else None,
-                label="Lead (headway)" if is_lead else "Traffic",
+                label="Lead car" if is_lead else "Traffic",
             )
         _draw_car(
             ax,
@@ -1025,7 +1025,8 @@ def _paper_strip(ax, title, result, env, dt, xlim, ylim, brake_time=None):
 
 
 def plot_lane_paper(
-    runs,
+    wide,
+    short,
     *,
     dt,
     save_path=None,
@@ -1036,83 +1037,100 @@ def plot_lane_paper(
     stretch=1.0,
     brake_time=None,
 ):
-    """Full-width compact lane figure: (a), (b) full rows; (c), (d) short.
+    """Full-width compact lane figure: full-width strips, then a short row.
 
     Every strip uses the same metres per inch, so distances compare across
     panels; with `stretch=1` the road is drawn to scale. The figure height
-    follows from the width, so there is no empty margin. The legend fills
-    the space right of (c) and (d).
+    follows from the width, so there is no empty margin. The short row
+    holds up to two panels and the legend fills the space beside them.
 
     Args:
-        runs: Four (title, MPCResult, environment) tuples in panel order.
+        wide: (title, MPCResult, environment) tuples, one full-width strip
+            each, top to bottom.
+        short: Up to two such tuples, side by side in the bottom row.
         dt: Step length in seconds.
         save_path: Output path; a PDF and a 300 dpi PNG are written.
         show: Display the figure.
-        span: Metres across the full width, for (a) and (b).
-        short_span: Metres shown in (c) and (d), at the same scale.
+        span: Metres across the full width.
+        short_span: Metres shown in the short panels, at the same scale.
         start: Left edge of every strip in metres.
         stretch: Lateral exaggeration (1 = true scale).
-        brake_time: If set, tick the (b) path where the lead brakes.
+        brake_time: If set, tick each wide path where the lead brakes.
 
     Returns:
-        (figure, axes).
+        (figure, axes) with the axes in panel order.
     """
-    if len(runs) != 4:
-        raise ValueError("plot_lane_paper expects exactly four runs")
+    if len(short) > 2 or not wide + short:
+        raise ValueError("plot_lane_paper needs runs and at most two short")
     margin, gap = 0.04, 0.14  # in
     title_h, ticks_h, label_h, row_gap = 0.14, 0.15, 0.13, 0.04
     width = PAPER_WIDTH - 2 * margin
     per_inch = span / width  # metres per inch, the same in every panel
-    road = runs[0][2].metadata["road"]
+    road = (wide + short)[0][2].metadata["road"]
     ylim = (road["y_min"] - 2.4, road["y_max"] + 0.6)
     strip = (ylim[1] - ylim[0]) / per_inch * stretch
-    short = short_span / per_inch
-    row3 = title_h + strip + ticks_h + label_h
-    row2 = row_gap + title_h + strip + ticks_h
-    height = row3 + row2 + title_h + strip + margin
+    short_w = short_span / per_inch
+    # Bottom edges in inches, built from the bottom row up.
+    short_bottom = ticks_h + label_h if short else None
+    cursor = short_bottom + strip + title_h if short else 0.0
+    wide_bottoms = []
+    for index in range(len(wide)):
+        lowest = index == 0  # only the lowest wide strip shows x ticks
+        cursor += (row_gap if short or index else 0.0) + (
+            ticks_h if lowest else 0.0
+        )
+        wide_bottoms.append(cursor)
+        cursor += strip + title_h
+    height = cursor + margin
+    wide_bottoms.reverse()
     fig = plt.figure(figsize=(PAPER_WIDTH, height))
 
-    def axes_at(left, bottom, size):
+    def axes_at(left, bottom, size, tall=strip):
         return fig.add_axes(
             [
                 left / PAPER_WIDTH,
                 bottom / height,
                 size / PAPER_WIDTH,
-                strip / height,
+                tall / height,
             ]
         )
 
-    bottom_c = ticks_h + label_h
-    bottom_b = row3 + ticks_h
-    bottom_a = row3 + row2
-    axes = [
-        axes_at(margin, bottom_a, width),
-        axes_at(margin, bottom_b, width),
-        axes_at(margin, bottom_c, short),
-        axes_at(margin + short + gap, bottom_c, short),
-    ]
-    limits = [(start, start + span)] * 2 + [(start, start + short_span)] * 2
-    for index, (ax, (title, result, env), xlim) in enumerate(
-        zip(axes, runs, limits)
+    axes = []
+    for index, ((title, result, env), bottom) in enumerate(
+        zip(wide, wide_bottoms)
     ):
-        brake = brake_time if index == 1 else None
-        _paper_strip(ax, title, result, env, dt, xlim, ylim, brake)
-    axes[0].tick_params(bottom=False, labelbottom=False)
-    for ax in axes[2:]:
+        ax = axes_at(margin, bottom, width)
+        _paper_strip(
+            ax,
+            title,
+            result,
+            env,
+            dt,
+            (start, start + span),
+            ylim,
+            brake_time,
+        )
+        if index < len(wide) - 1:
+            ax.tick_params(bottom=False, labelbottom=False)
+        axes.append(ax)
+    for index, (title, result, env) in enumerate(short):
+        ax = axes_at(margin + index * (short_w + gap), short_bottom, short_w)
+        _paper_strip(
+            ax, title, result, env, dt, (start, start + short_span), ylim
+        )
         ax.set_xticks(np.arange(0, start + short_span, 10))
         ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=1)
+        axes.append(ax)
     handles = {}
     for ax in axes:
         for handle, label in zip(*ax.get_legend_handles_labels()):
             handles.setdefault(label, handle)
-    legend_left = margin + 2 * (short + gap)
-    legend_ax = fig.add_axes(
-        [
-            legend_left / PAPER_WIDTH,
-            bottom_c / height,
-            (PAPER_WIDTH - legend_left - margin) / PAPER_WIDTH,
-            (strip + title_h) / height,
-        ]
+    legend_left = margin + 2 * (short_w + gap)
+    legend_ax = axes_at(
+        legend_left,
+        short_bottom if short else wide_bottoms[-1],
+        PAPER_WIDTH - legend_left - margin,
+        tall=strip + title_h,
     )
     legend_ax.set_axis_off()
     legend_ax.legend(
@@ -1126,12 +1144,11 @@ def plot_lane_paper(
         columnspacing=0.8,
         borderaxespad=0.0,
     )
+    scale = "to scale" if stretch == 1 else f"{stretch:g}x wide"
     legend_ax.text(
         0.0,
         0.0,
-        f"Numbers: moment of each car (times below).\n"
-        f"Drawn {'to scale' if stretch == 1 else f'{stretch:g}x wide'}"
-        ".",
+        f"Numbers: moment of each car (times below).\nDrawn {scale}.",
         fontsize=PAPER_FONT - 1,
         va="bottom",
         transform=legend_ax.transAxes,

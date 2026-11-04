@@ -65,9 +65,9 @@ with skip_run("skip", "LaneBatch") as check, check():
         lane.batch(f"{LANE}/lane_{name}.yaml", seeds=range(5))
 
 
-# 10. Paper outputs: the compact full-width figure from the runs saved by
-#     blocks 5-8 (outputs/lane_paper.pdf), and the LaTeX table from the
-#     batch results of block 9 (outputs/lane_table.tex).
+# 10. Paper outputs: the compact full-width figure of merge, dense and gap
+#     from the runs saved by blocks 5, 7 and 8 (outputs/lane_paper.pdf), and
+#     the LaTeX table of all four scenes from block 9 (outputs/lane_table.tex).
 with skip_run("skip", "LanePaper") as check, check():
     lane.paper_figure()
     lane.latex_table()
