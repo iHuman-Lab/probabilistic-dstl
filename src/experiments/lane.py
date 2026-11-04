@@ -782,18 +782,30 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
 # --- Paper outputs -------------------------------------------------------------
 
 LANE_DIR = "configs/scenarios/lane"
-# Scenes drawn in the paper figure: the first full width, the rest side by
-# side. Headway looks like the merge strip, so it is reported in the table.
+# Paper figure: one simulation frame per scene, (name, title, time in s).
+# The first is drawn full width, the next two side by side. Formulas are the
+# exact specs at t = 0 (absolute deadlines; each replan keeps them), with
+#   M^d_I = ◇_I(□_[0,d] lane ∧ ◇_[d,d](x ≤ 69.75) ∧ □_[d,∞)(lane ∧ |v_y| ≤ 0.3)).
+MERGE_TASK = (
+    r"$M^{d}_{I} = ◇_{I}\,(□_{[0,d]}\,\mathrm{lane} \wedge ◇_{[d,d]}"
+    r"\,(x \leq 69.75) \wedge □_{[d,\infty)}\,(\mathrm{lane} \wedge"
+    r" |v_y| \leq 0.3))$"
+)
 FIGURE_SCENES = (
     (
         "merge",
-        (
-            "(a) Merge: □safe ∧ ◇□in-lane (1 s dwell in window), settle;"
-            " the lead brakes at 4 s"
-        ),
+        r"(a) Merge, $t = 2.0$ s:  $\varphi_A = □_{[0,6]}\,\mathrm{safe}"
+        r" \wedge M^{1}_{[2.6,4]}$,   " + MERGE_TASK,
+        2.0,
     ),
-    ("merge_or_yield", "(b) Dense: □safe ∧ (merge ∨ ◇□stopped)"),
-    ("merge_or_yield_gap", "(c) One gap open: same rule as (b)"),
+    ("merge_or_yield", r"(b) Dense traffic, $t = 1.6$ s", 1.6),
+    ("merge_or_yield_gap", r"(c) One gap open, $t = 1.0$ s", 1.0),
+)
+# The formula (b) and (c) share, written once above them.
+YIELD_FORMULA = (
+    r"(b), (c) Merge or yield:  $\varphi_C = □_{[0,6]}\,\mathrm{safe}"
+    r" \wedge (M^{0.6}_{[0.8,3.4]} \vee ◇_{[2.4,4]}□_{[0,\infty)}"
+    r"\,\mathrm{stop})$"
 )
 # Rows of the paper table (scene, row name).
 TABLE_SCENES = (
@@ -808,34 +820,26 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
     """The compact full-width lane figure from saved runs.
 
     Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
-    The first scene is drawn full width, the next two side by side. Writes
+    Each panel is the simulation at the scene's chosen time: every car,
+    the driven path, and the plan made then with its 95% regions. Writes
     outputs/lane_paper.pdf and .png and returns (figure, axes).
     """
     from visualization.figures import plot_lane_paper
 
-    runs, dt, brake = [], None, None
-    for name, title in scenes:
+    panels = []
+    for name, title, time in scenes:
         cfg = load_config(f"{LANE_DIR}/lane_{name}.yaml")
         path = output_path(f"lane_{name}", ".pt")
         if not path.exists():
             raise FileNotFoundError(f"run lane_{name}.yaml first ({path})")
         result = torch.load(path, weights_only=False)
-        runs.append((title, result, build_lane_merge_environment(cfg)))
-        dt = cfg["dt"]
-        lead = cfg["task"].get("headway", {}).get("lead_vehicle")
-        brake = brake or next(
-            (
-                car["brake"]["at"]
-                for car in cfg["traffic"]
-                if car["name"] == lead and "brake" in car
-            ),
-            None,
-        )
+        step = min(round(time / cfg["dt"]), len(result.states) - 1)
+        env = build_lane_merge_environment(cfg)
+        panels.append((title, result, env, step))
     return plot_lane_paper(
-        runs[:1],
-        runs[1:],
-        dt=dt,
-        brake_time=brake,
+        panels[:1],
+        panels[1:],
+        short_title=YIELD_FORMULA,
         save_path=output_path("lane_paper", ".pdf") if save else None,
         show=show,
     )
