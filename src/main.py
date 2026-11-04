@@ -62,7 +62,7 @@ with skip_run("skip", "LaneMergeOrYieldGap") as check, check():
 #    (outcomes, gaps, scores, replanning times) to outputs/<name>_batch.json.
 with skip_run("skip", "LaneBatch") as check, check():
     for name in ("merge", "headway", "merge_or_yield", "merge_or_yield_gap"):
-        lane.batch(f"{LANE}/lane_{name}.yaml", seeds=range(5))
+        lane.batch(f"{LANE}/lane_{name}.yaml", seeds=range(20))
 
 
 # 10. Paper outputs: the compact full-width figure of merge, dense and gap
