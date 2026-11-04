@@ -222,14 +222,15 @@ table, and saves them with the `.pt` result in `outputs/`. Leave
 replanning timer. `lane.batch` saves `outputs/<name>_batch.json`.
 
 For the paper, block `LanePaper` builds one full-width figure (7.16 in wide,
-about 2.4 in tall) from the saved runs. Each panel is the simulation at one
-chosen moment, as the planner saw it: every car (with a 0.5 s motion arrow),
-the path driven so far, and the plan made at that moment with 95% position
-regions of its predicted belief. (a) merge is full width; (b) dense and (c)
-one-gap merge-or-yield share a row. Titles carry the exact STL specs
-(`FIGURE_SCENES`, `YIELD_FORMULA` in `lane.py`). The road is drawn 1.4x
-taller than true scale. Headway is left out of the figure (its frame looks
-like the merge frame) and reported in `outputs/lane_table.tex`, written from
+about 2.3 in tall) from the saved runs. Each panel is the simulation at one
+chosen moment: shaded lanes, every car with a 0.5 s motion arrow, the path
+driven so far, the plan made at that moment, and the ego turned to its
+heading. (a) merge is full width; (b) dense and (c) one-gap merge-or-yield
+share a row. Titles give each spec in short form; the exact specs are in the
+comment above `FIGURE_SCENES` in `lane.py`, for the caption. The road is
+drawn 1.4x taller than true scale. The plan's predicted 95% region is off by
+default (`show_uncertainty=True` draws it): at these noise levels it is too
+small to see. Headway is reported in `outputs/lane_table.tex`, written from
 the batch results: completed trials, closest clearance and lead gap, lowest
 window score, replanning median/p95.
 

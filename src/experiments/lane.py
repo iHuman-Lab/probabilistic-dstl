@@ -783,29 +783,27 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
 
 LANE_DIR = "configs/scenarios/lane"
 # Paper figure: one simulation frame per scene, (name, title, time in s).
-# The first is drawn full width, the next two side by side. Formulas are the
-# exact specs at t = 0 (absolute deadlines; each replan keeps them), with
-#   M^d_I = ◇_I(□_[0,d] lane ∧ ◇_[d,d](x ≤ 69.75) ∧ □_[d,∞)(lane ∧ |v_y| ≤ 0.3)).
-MERGE_TASK = (
-    r"$M^{d}_{I} = ◇_{I}\,(□_{[0,d]}\,\mathrm{lane} \wedge ◇_{[d,d]}"
-    r"\,(x \leq 69.75) \wedge □_{[d,\infty)}\,(\mathrm{lane} \wedge"
-    r" |v_y| \leq 0.3))$"
-)
+# The first is drawn full width, the next two side by side. The exact specs
+# at t = 0 (absolute deadlines, kept by every replan), for the caption:
+#   A: G[0,6] safe AND M(1 s, [2.6, 4.0] s)
+#   C: G[0,6] safe AND (M(0.6 s, [0.8, 3.4] s) OR F[2.4,4.0] G[0,inf) stop)
+#   M(d, I) = F_I (G[0,d] lane AND F[d,d] x <= 69.75
+#                  AND G[d,inf) (lane AND |v_y| <= 0.3))
 FIGURE_SCENES = (
     (
         "merge",
-        r"(a) Merge, $t = 2.0$ s:  $\varphi_A = □_{[0,6]}\,\mathrm{safe}"
-        r" \wedge M^{1}_{[2.6,4]}$,   " + MERGE_TASK,
+        (
+            "(a) Merge, t = 2.0 s:   □ safe ∧ ◇□ in-lane (1 s dwell in the"
+            " window), then settle"
+        ),
         2.0,
     ),
-    ("merge_or_yield", r"(b) Dense traffic, $t = 1.6$ s", 1.6),
-    ("merge_or_yield_gap", r"(c) One gap open, $t = 1.0$ s", 1.0),
-)
-# The formula (b) and (c) share, written once above them.
-YIELD_FORMULA = (
-    r"(b), (c) Merge or yield:  $\varphi_C = □_{[0,6]}\,\mathrm{safe}"
-    r" \wedge (M^{0.6}_{[0.8,3.4]} \vee ◇_{[2.4,4]}□_{[0,\infty)}"
-    r"\,\mathrm{stop})$"
+    (
+        "merge_or_yield",
+        "(b) Dense, t = 1.6 s:   □ safe ∧ (merge ∨ ◇□ stopped)",
+        1.6,
+    ),
+    ("merge_or_yield_gap", "(c) One gap open, t = 1.0 s:   same rule", 1.0),
 )
 # Rows of the paper table (scene, row name).
 TABLE_SCENES = (
@@ -839,7 +837,6 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
     return plot_lane_paper(
         panels[:1],
         panels[1:],
-        short_title=YIELD_FORMULA,
         save_path=output_path("lane_paper", ".pdf") if save else None,
         show=show,
     )

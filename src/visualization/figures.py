@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib import patches
+from matplotlib.transforms import Affine2D
 
 from planning.environment import lane_lead_gap
 
@@ -837,10 +838,31 @@ PAPER_FONT = 7  # pt
 
 
 def _draw_road(ax, env):
-    """Road edges, lane divider, ramp taper and yield zone, no fills."""
+    """Shaded lanes (target lane green), edges, divider, ramp taper."""
     road = env.metadata["road"]
     ramp = env.metadata.get("ramp")
     edge = {"color": "0.35", "linewidth": 0.8}
+    ax.axhspan(
+        road["lane_divider"],
+        road["y_max"],
+        color=COLORS["goal"],
+        alpha=0.08,
+        lw=0,
+        label="Target lane",
+    )
+    if ramp is None:
+        ax.axhspan(
+            road["y_min"], road["lane_divider"], color="0.5", alpha=0.06, lw=0
+        )
+    else:
+        ax.fill_between(
+            [-1e3, ramp["start_x"], ramp["end_x"]],
+            [road["y_min"], road["y_min"], road["lane_divider"]],
+            road["lane_divider"],
+            color="0.5",
+            alpha=0.06,
+            lw=0,
+        )
     divider = {"color": "0.55", "linewidth": 0.6, "linestyle": "--"}
     ax.axhline(road["y_max"], **edge)
     if ramp is None:
@@ -875,9 +897,10 @@ def _draw_road(ax, env):
         )
 
 
-def _draw_car(ax, center, size, color, *, edge=None, label=None):
-    """A filled car footprint; `edge` outlines a car the text refers to."""
-    ax.add_patch(
+def _draw_car(ax, center, size, color, *, heading=0.0, edge=None, label=None):
+    """A filled car footprint turned to `heading` (rad); `edge` outlines
+    a car the text refers to."""
+    car = ax.add_patch(
         VehiclePatch(
             center[0] - size["width"] / 2,
             center[1] - size["height"] / 2,
@@ -891,14 +914,19 @@ def _draw_car(ax, center, size, color, *, edge=None, label=None):
             zorder=4,
         )
     )
+    car.set_transform(
+        Affine2D().rotate_around(center[0], center[1], heading) + ax.transData
+    )
 
 
-def _frame_strip(ax, title, result, env, step, xlim, ylim, ellipse_every=5):
+def _frame_strip(
+    ax, title, result, env, step, xlim, ylim, show_uncertainty=False
+):
     """One simulation frame: what the planner saw and did at `step`.
 
     Every car at its true position, the ego path driven so far, and the
-    plan made at this step: its mean (dashed) and the 95% position region
-    of the predicted belief every `ellipse_every` steps.
+    plan made at this step (dashed), optionally with the 95% position
+    region of its predicted belief. The ego is turned to its heading.
     """
     _draw_road(ax, env)
     path = np.asarray([_np(_ego_truth(state))[:2] for state in result.states])
@@ -913,9 +941,21 @@ def _frame_strip(ax, title, result, env, step, xlim, ylim, ellipse_every=5):
         aux = result.window_plans[step].rollout.aux
         mean = _np(aux["mean_trace"])[0]
         covariance = _np(aux["cov_trace"])[0]
-        for k in range(ellipse_every, len(mean), ellipse_every):
-            _ellipse(
-                ax, mean[k], covariance[k][:2, :2], label="Plan 95% region"
+        # The predicted 95% position region along the plan, as one band.
+        for k in range(1, len(mean), 2) if show_uncertainty else ():
+            width, height, angle = _ellipse_parameters(covariance[k][:2, :2])
+            ax.add_patch(
+                patches.Ellipse(
+                    mean[k, :2],
+                    width,
+                    height,
+                    angle=angle,
+                    facecolor=COLORS["ellipse"],
+                    edgecolor="none",
+                    alpha=0.18,
+                    zorder=2,
+                    label="Predicted 95% region",
+                )
             )
         ax.plot(
             mean[:, 0],
@@ -926,7 +966,6 @@ def _frame_strip(ax, title, result, env, step, xlim, ylim, ellipse_every=5):
             zorder=3,
             label="Current plan",
         )
-    lead = env.metadata["task"].get("headway", {}).get("lead_vehicle")
     cars = _np(_traffic_truth(result.states[step]))
     for car, center in zip(env.metadata["traffic"], cars):
         # Where the car's front will be in 0.5 s at its current speed.
@@ -946,15 +985,7 @@ def _frame_strip(ax, title, result, env, step, xlim, ylim, ellipse_every=5):
             annotation_clip=True,
             zorder=3,
         )
-        is_lead = car["name"] == lead
-        _draw_car(
-            ax,
-            center[:2],
-            car,
-            COLORS["traffic"],
-            edge="black" if is_lead else None,
-            label="Lead car" if is_lead else "Traffic",
-        )
+        _draw_car(ax, center[:2], car, COLORS["traffic"], label="Traffic")
     ax.plot(
         [],
         [],
@@ -962,13 +993,15 @@ def _frame_strip(ax, title, result, env, step, xlim, ylim, ellipse_every=5):
         lw=0.6,
         marker=">",
         ms=3,
-        label="Motion in 0.5 s",
+        label="0.5 s motion",
     )
+    velocity = _np(_ego_truth(result.states[step]))[2:4]
     _draw_car(
         ax,
         path[step],
         env.metadata["ego_vehicle"],
         COLORS["executed"],
+        heading=float(np.arctan2(velocity[1], max(velocity[0], 0.5))),
         label="Ego",
     )
     ax.set_xlim(*xlim)
@@ -992,6 +1025,7 @@ def plot_lane_paper(
     short_span=40.0,
     start=-5.0,
     stretch=1.4,
+    show_uncertainty=False,
 ):
     """Full-width compact figure of simulation frames.
 
@@ -1011,6 +1045,8 @@ def plot_lane_paper(
         short_span: Metres shown in each short panel, at the same scale.
         start: Left edge of every panel in metres.
         stretch: How much taller than true scale the road is drawn.
+        show_uncertainty: Also draw the plan's predicted 95% region (worth it
+            only when the noise is large enough to see at this scale).
 
     Returns:
         (figure, axes) with the axes in panel order.
@@ -1057,7 +1093,14 @@ def plot_lane_paper(
         for (title, result, env, step), bottom in zip(wide, wide_bottoms):
             ax = axes_at(margin, bottom, width)
             _frame_strip(
-                ax, title, result, env, step, (start, start + span), ylim
+                ax,
+                title,
+                result,
+                env,
+                step,
+                (start, start + span),
+                ylim,
+                show_uncertainty,
             )
             axes.append(ax)
         for index, (title, result, env, step) in enumerate(short):
@@ -1065,7 +1108,14 @@ def plot_lane_paper(
                 margin + index * (short_w + gap), short_bottom, short_w
             )
             _frame_strip(
-                ax, title, result, env, step, (start, start + short_span), ylim
+                ax,
+                title,
+                result,
+                env,
+                step,
+                (start, start + short_span),
+                ylim,
+                show_uncertainty,
             )
             ax.set_xticks(np.arange(0, start + short_span, 10))
             axes.append(ax)

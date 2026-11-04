@@ -1083,16 +1083,17 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
         cfg["warm_starts"] = cfg["warm_starts"][:1]
         s = lane.build(cfg, device="cpu")
         panels.append((title, lane.trial(s, max_steps=2), s.env, 1))
-    fig, axes = plot_lane_paper(
-        panels[:1], panels[1:], short_title=lane.YIELD_FORMULA
-    )
+    fig, axes = plot_lane_paper(panels[:1], panels[1:])
     width, height = fig.get_size_inches()
-    assert width == PAPER_WIDTH and height < 2.6
+    assert width == PAPER_WIDTH and height < 2.4
     assert len(axes) == 3
-    # The plan with its 95% regions is drawn in every panel.
+    # Every panel shows the plan; the 95% region only when asked for.
     for ax in axes:
-        labels = ax.get_legend_handles_labels()[1]
-        assert {"Current plan", "Plan 95% region", "Ego"} <= set(labels)
+        labels = set(ax.get_legend_handles_labels()[1])
+        assert {"Current plan", "Ego", "Traffic"} <= labels
+        assert "Predicted 95% region" not in labels
+    _fig, axes = plot_lane_paper(panels[:1], [], show_uncertainty=True)
+    assert "Predicted 95% region" in axes[0].get_legend_handles_labels()[1]
     # Same metres per inch in every panel (to scale across panels).
     scales = [
         (ax.get_xlim()[1] - ax.get_xlim()[0])
