@@ -737,6 +737,14 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
         "minimum clearance [m]": min(
             row["Minimum traffic clearance [m]"] for row in trials
         ),
+        "minimum lead gap in lane [m]": min(
+            (
+                row["Minimum lead gap in lane [m]"]
+                for row in trials
+                if row.get("Minimum lead gap in lane [m]") is not None
+            ),
+            default=None,
+        ),
         "lowest window score": min(
             (
                 row["Lowest window score"]
@@ -769,3 +777,91 @@ def batch(config_path, seeds, *, save=True, budget_ms=200.0, max_steps=None):
             json.dumps({"table": table, "trials": trials}, indent=1)
         )
     return trials, table
+
+
+# --- Paper outputs -------------------------------------------------------------
+
+LANE_DIR = "configs/scenarios/lane"
+PAPER_SCENES = (
+    ("merge", "(a) Merge: □safe ∧ ◇□in-lane (1 s dwell in window), settle"),
+    ("headway", "(b) Headway: (a) ∧ □(in-lane → gap to lead ≥ 22 m)"),
+    ("merge_or_yield", "(c) Dense: □safe ∧ (merge ∨ ◇□stopped)"),
+    ("merge_or_yield_gap", "(d) One gap open: same rule as (c)"),
+)
+
+
+def paper_figure(scenes=PAPER_SCENES, *, save=True, show=False):
+    """The compact full-width lane figure from saved runs.
+
+    Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
+    Writes outputs/lane_paper.pdf and .png and returns (figure, axes).
+    """
+    from visualization.figures import plot_lane_paper
+
+    runs, dt, brake = [], None, None
+    for name, title in scenes:
+        cfg = load_config(f"{LANE_DIR}/lane_{name}.yaml")
+        path = output_path(f"lane_{name}", ".pt")
+        if not path.exists():
+            raise FileNotFoundError(f"run lane_{name}.yaml first ({path})")
+        result = torch.load(path, weights_only=False)
+        runs.append((title, result, build_lane_merge_environment(cfg)))
+        dt = cfg["dt"]
+        if name == "headway":
+            brake = next(
+                (
+                    car["brake"]["at"]
+                    for car in cfg["traffic"]
+                    if car["name"] == cfg["task"]["headway"]["lead_vehicle"]
+                    and "brake" in car
+                ),
+                None,
+            )
+    return plot_lane_paper(
+        runs,
+        dt=dt,
+        brake_time=brake,
+        save_path=output_path("lane_paper", ".pdf") if save else None,
+        show=show,
+    )
+
+
+def latex_table(scenes=PAPER_SCENES, *, save=True):
+    """A LaTeX tabular from saved batch results (run `batch` per scene first).
+
+    Columns: completed trials, closest traffic clearance, closest lead gap,
+    lowest window score, and replanning median / p95 in milliseconds.
+    """
+    lines = [
+        r"\begin{tabular}{lccccc}",
+        r"\toprule",
+        (
+            r"Scene & Completed & Clearance (m) & Lead gap (m) & "
+            r"Lowest $\underline{\rho}$ & Replan med./p95 (ms) \\"
+        ),
+        r"\midrule",
+    ]
+    for name, title in scenes:
+        path = output_path(f"lane_{name}_batch", ".json")
+        table = json.loads(path.read_text())["table"]
+        done = sum(
+            count
+            for outcome, count in table["outcomes"].items()
+            if outcome in ("success", "yielded")
+        )
+        gap = table.get("minimum lead gap in lane [m]")
+        lowest = table["lowest window score"]
+        lines.append(
+            f"{title.split(':')[0]} & {done}/{table['trials']} & "
+            f"{table['minimum clearance [m]']:.1f} & "
+            f"{'--' if gap is None else f'{gap:.1f}'} & "
+            f"{'--' if lowest is None else f'{lowest:.2f}'} & "
+            f"{table['later replans median [ms]']:.0f} / "
+            f"{table['later replans p95 [ms]']:.0f} \\\\"
+        )
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    text = "\n".join(lines)
+    if save:
+        output_path("lane_table", ".tex").write_text(text + "\n")
+    print(text)
+    return text

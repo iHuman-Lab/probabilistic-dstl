@@ -63,3 +63,11 @@ with skip_run("skip", "LaneMergeOrYieldGap") as check, check():
 with skip_run("skip", "LaneBatch") as check, check():
     for name in ("merge", "headway", "merge_or_yield", "merge_or_yield_gap"):
         lane.batch(f"{LANE}/lane_{name}.yaml", seeds=range(5))
+
+
+# 10. Paper outputs: the compact full-width figure from the runs saved by
+#     blocks 5-8 (outputs/lane_paper.pdf), and the LaTeX table from the
+#     batch results of block 9 (outputs/lane_table.tex).
+with skip_run("skip", "LanePaper") as check, check():
+    lane.paper_figure()
+    lane.latex_table()

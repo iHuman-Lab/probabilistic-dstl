@@ -221,6 +221,13 @@ table, and saves them with the `.pt` result in `outputs/`. Leave
 `LANE_VIEW` live drawing off when reading timings: drawing runs inside the
 replanning timer. `lane.batch` saves `outputs/<name>_batch.json`.
 
+For the paper, block `LanePaper` builds one full-width figure (7.16 in wide,
+about 2.5 in tall, drawn to scale) from the runs saved by blocks 5-8: (a)
+and (b) as full-width strips, (c) and (d) side by side, every car drawn at
+the start, at task completion and at the end, numbered by moment. It also
+writes `outputs/lane_table.tex` from the batch results (completed trials,
+closest clearance and lead gap, lowest window score, replanning median/p95).
+
 Two planner settings keep the closed loop steady; the lane YAMLs set both
 (defaults elsewhere are unchanged):
 

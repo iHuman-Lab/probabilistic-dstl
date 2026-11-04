@@ -828,3 +828,320 @@ def plot_lane_snapshots(
     )
     _finish(fig, save_path, show)
     return fig, axes
+
+
+# --- Paper figure ---------------------------------------------------------------
+
+PAPER_WIDTH = 7.16  # in, IEEE two-column text width
+PAPER_FONT = 7  # pt
+
+
+def _lane_moments(result, still=1.0):
+    """Start, task completion (merge or yield) and end, as state indices.
+
+    A moment where the ego is within `still` metres of the next one is
+    dropped (a stopped car would be drawn twice in the same place).
+    """
+    final = result.states[-1]
+    done = [
+        step
+        for step in (final.true_completed, final.true_yield_completed)
+        if step is not None
+    ]
+    end = len(result.states) - 1
+    middle = min(done) if done else end // 2
+    moments = sorted({0, min(middle, end), end})
+    path = np.asarray([_np(_ego_truth(s))[:2] for s in result.states])
+    return [
+        step
+        for step, after in zip(moments, [*moments[1:], None])
+        if after is None or np.linalg.norm(path[after] - path[step]) > still
+    ]
+
+
+def _draw_road(ax, env):
+    """Road edges, lane divider, ramp taper and yield zone, no fills."""
+    road = env.metadata["road"]
+    ramp = env.metadata.get("ramp")
+    edge = {"color": "0.35", "linewidth": 0.8}
+    divider = {"color": "0.55", "linewidth": 0.6, "linestyle": "--"}
+    ax.axhline(road["y_max"], **edge)
+    if ramp is None:
+        ax.axhline(road["y_min"], **edge)
+        ax.axhline(road["lane_divider"], **divider)
+    else:
+        start, end = ramp["start_x"], ramp["end_x"]
+        middle = road["lane_divider"]
+        ax.plot(
+            [-1e3, start, end, 1e3], [road["y_min"]] * 2 + [middle] * 2, **edge
+        )
+        ax.plot([-1e3, start], [middle] * 2, **divider)
+        ax.fill_between(
+            [start, end],
+            [road["y_min"], middle],
+            road["y_min"],
+            color="0.88",
+            lw=0,
+        )
+    if "yield" in env.regions:
+        zone = env.region("yield")
+        ax.add_patch(
+            patches.Rectangle(
+                (zone.xmin, zone.ymin),
+                zone.xmax - zone.xmin,
+                zone.ymax - zone.ymin,
+                facecolor=COLORS["target"],
+                alpha=0.25,
+                lw=0,
+                label="Yield zone",
+            )
+        )
+
+
+def _draw_car(
+    ax, center, size, color, number, *, alpha, edge=None, label=None
+):
+    """A car footprint with its moment number written inside."""
+    ax.add_patch(
+        VehiclePatch(
+            center[0] - size["width"] / 2,
+            center[1] - size["height"] / 2,
+            size["width"],
+            size["height"],
+            facecolor=color,
+            edgecolor=edge or color,
+            linewidth=0.9 if edge else 0.4,
+            alpha=alpha,
+            label=label,
+            zorder=4,
+        )
+    )
+    ax.text(
+        center[0],
+        center[1],
+        str(number),
+        ha="center",
+        va="center",
+        fontsize=PAPER_FONT - 2,
+        color="white" if alpha > 0.7 else color,
+        zorder=5,
+        clip_on=True,
+    )
+
+
+def _write_times(ax, times, y, xlim, gap_inches=0.45):
+    """Moment times under the ego; labels that would touch are joined."""
+    fig_width = ax.figure.get_size_inches()[0]
+    gap = (
+        gap_inches
+        * (xlim[1] - xlim[0])
+        / (ax.get_position().width * fig_width)
+    )
+    groups = []
+    for x, text in times:
+        if groups and x - groups[-1][-1][0] < gap:
+            groups[-1].append((x, text))
+        else:
+            groups.append([(x, text)])
+    for group in groups:
+        x = float(np.mean([x for x, _ in group]))
+        if xlim[0] <= x <= xlim[1]:
+            label = ", ".join(text for _, text in group) + " s"
+            ax.text(
+                x,
+                y,
+                label,
+                ha="center",
+                va="center",
+                fontsize=PAPER_FONT - 1,
+                color=COLORS["executed"],
+            )
+
+
+def _paper_strip(ax, title, result, env, dt, xlim, ylim, brake_time=None):
+    """One time-lapse strip: road, ego path, every car at a few moments.
+
+    Every car carries the number of its moment (1 = start, then task
+    completion, then the end), from faint to solid, so cars from different
+    moments can overlap without looking like a collision. The time of each
+    moment is written under the strip at the ego's position. The headway
+    lead, if any, has a dark outline.
+    """
+    _draw_road(ax, env)
+    path = np.asarray([_np(_ego_truth(state))[:2] for state in result.states])
+    ax.plot(
+        *path.T, color=COLORS["executed"], lw=1.0, zorder=3, label="Ego path"
+    )
+    moments = _lane_moments(result)
+    ego = env.metadata["ego_vehicle"]
+    lead = env.metadata["task"].get("headway", {}).get("lead_vehicle")
+    label_y = (ylim[0] + env.metadata["road"]["y_min"]) / 2
+    times = []  # (x, text) under the strip, one per moment
+    shades = np.linspace(0.3, 1.0, len(moments)) if len(moments) > 1 else [1]
+    for number, (step, shade) in enumerate(zip(moments, shades), start=1):
+        cars = _np(_traffic_truth(result.states[step]))
+        for car, center in zip(env.metadata["traffic"], cars):
+            is_lead = car["name"] == lead
+            _draw_car(
+                ax,
+                center[:2],
+                car,
+                COLORS["traffic"],
+                number,
+                alpha=shade,
+                edge="black" if is_lead else None,
+                label="Lead (headway)" if is_lead else "Traffic",
+            )
+        _draw_car(
+            ax,
+            path[step],
+            ego,
+            COLORS["executed"],
+            number,
+            alpha=shade,
+            label="Ego",
+        )
+        times.append((path[step, 0], f"{step * dt:.1f}"))
+    _write_times(ax, times, label_y, xlim)
+    if brake_time is not None:
+        index = min(round(brake_time / dt), len(path) - 1)
+        ax.plot(
+            *path[index],
+            marker="|",
+            ms=6,
+            mew=1.2,
+            ls="none",
+            color="black",
+            zorder=5,
+            label="Ego when lead brakes",
+        )
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_yticks([])
+    for side in ("left", "right", "top", "bottom"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(labelsize=PAPER_FONT, length=0, pad=1)
+    ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1)
+
+
+def plot_lane_paper(
+    runs,
+    *,
+    dt,
+    save_path=None,
+    show=False,
+    span=135.0,
+    short_span=40.0,
+    start=-5.0,
+    stretch=1.0,
+    brake_time=None,
+):
+    """Full-width compact lane figure: (a), (b) full rows; (c), (d) short.
+
+    Every strip uses the same metres per inch, so distances compare across
+    panels; with `stretch=1` the road is drawn to scale. The figure height
+    follows from the width, so there is no empty margin. The legend fills
+    the space right of (c) and (d).
+
+    Args:
+        runs: Four (title, MPCResult, environment) tuples in panel order.
+        dt: Step length in seconds.
+        save_path: Output path; a PDF and a 300 dpi PNG are written.
+        show: Display the figure.
+        span: Metres across the full width, for (a) and (b).
+        short_span: Metres shown in (c) and (d), at the same scale.
+        start: Left edge of every strip in metres.
+        stretch: Lateral exaggeration (1 = true scale).
+        brake_time: If set, tick the (b) path where the lead brakes.
+
+    Returns:
+        (figure, axes).
+    """
+    if len(runs) != 4:
+        raise ValueError("plot_lane_paper expects exactly four runs")
+    margin, gap = 0.04, 0.14  # in
+    title_h, ticks_h, label_h, row_gap = 0.14, 0.15, 0.13, 0.04
+    width = PAPER_WIDTH - 2 * margin
+    per_inch = span / width  # metres per inch, the same in every panel
+    road = runs[0][2].metadata["road"]
+    ylim = (road["y_min"] - 2.4, road["y_max"] + 0.6)
+    strip = (ylim[1] - ylim[0]) / per_inch * stretch
+    short = short_span / per_inch
+    row3 = title_h + strip + ticks_h + label_h
+    row2 = row_gap + title_h + strip + ticks_h
+    height = row3 + row2 + title_h + strip + margin
+    fig = plt.figure(figsize=(PAPER_WIDTH, height))
+
+    def axes_at(left, bottom, size):
+        return fig.add_axes(
+            [
+                left / PAPER_WIDTH,
+                bottom / height,
+                size / PAPER_WIDTH,
+                strip / height,
+            ]
+        )
+
+    bottom_c = ticks_h + label_h
+    bottom_b = row3 + ticks_h
+    bottom_a = row3 + row2
+    axes = [
+        axes_at(margin, bottom_a, width),
+        axes_at(margin, bottom_b, width),
+        axes_at(margin, bottom_c, short),
+        axes_at(margin + short + gap, bottom_c, short),
+    ]
+    limits = [(start, start + span)] * 2 + [(start, start + short_span)] * 2
+    for index, (ax, (title, result, env), xlim) in enumerate(
+        zip(axes, runs, limits)
+    ):
+        brake = brake_time if index == 1 else None
+        _paper_strip(ax, title, result, env, dt, xlim, ylim, brake)
+    axes[0].tick_params(bottom=False, labelbottom=False)
+    for ax in axes[2:]:
+        ax.set_xticks(np.arange(0, start + short_span, 10))
+        ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=1)
+    handles = {}
+    for ax in axes:
+        for handle, label in zip(*ax.get_legend_handles_labels()):
+            handles.setdefault(label, handle)
+    legend_left = margin + 2 * (short + gap)
+    legend_ax = fig.add_axes(
+        [
+            legend_left / PAPER_WIDTH,
+            bottom_c / height,
+            (PAPER_WIDTH - legend_left - margin) / PAPER_WIDTH,
+            (strip + title_h) / height,
+        ]
+    )
+    legend_ax.set_axis_off()
+    legend_ax.legend(
+        handles.values(),
+        handles.keys(),
+        loc="upper left",
+        ncol=2,
+        fontsize=PAPER_FONT - 1,
+        frameon=False,
+        handlelength=1.4,
+        columnspacing=0.8,
+        borderaxespad=0.0,
+    )
+    legend_ax.text(
+        0.0,
+        0.0,
+        f"Numbers: moment of each car (times below).\n"
+        f"Drawn {'to scale' if stretch == 1 else f'{stretch:g}x wide'}"
+        ".",
+        fontsize=PAPER_FONT - 1,
+        va="bottom",
+        transform=legend_ax.transAxes,
+    )
+    if save_path is not None:
+        stem = Path(save_path).with_suffix("")
+        stem.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(stem.with_suffix(".pdf"))
+        fig.savefig(stem.with_suffix(".png"), dpi=300)
+    if show and matplotlib.get_backend().lower() != "agg":
+        plt.show(block=True)
+    plt.close(fig)
+    return fig, axes

@@ -1066,3 +1066,49 @@ def test_batch_runs_each_seed_and_saves_one_table(
     assert len(trials[0]["replan_ms"]) == len(trials[0]["window_scores"])
     saved = (tmp_path / "lane_change_batch.json").read_text()
     assert '"table"' in saved and '"trials"' in saved
+
+
+def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from planning import runners
+    from visualization.figures import PAPER_WIDTH, plot_lane_paper
+
+    runs = []
+    for name, title in lane.PAPER_SCENES:
+        cfg = load_config(f"configs/scenarios/lane/lane_{name}.yaml")
+        cfg["planner"]["max_iters"] = 1
+        cfg["warm_starts"] = cfg["warm_starts"][:1]
+        s = lane.build(cfg, device="cpu")
+        runs.append((title, lane.trial(s, max_steps=2), s.env))
+    fig, axes = plot_lane_paper(runs, dt=0.2, brake_time=0.2)
+    width, height = fig.get_size_inches()
+    assert width == PAPER_WIDTH and height < 3.0
+    # Same metres per inch in every panel (to scale across panels).
+    scales = [
+        (ax.get_xlim()[1] - ax.get_xlim()[0])
+        / (ax.get_position().width * width)
+        for ax in axes
+    ]
+    assert max(scales) == pytest.approx(min(scales))
+    monkeypatch.setattr(runners, "RESULTS_DIR", tmp_path)
+    for name, _title in lane.PAPER_SCENES:
+        table = {
+            "trials": 5,
+            "outcomes": {"success": 4, "collision": 1},
+            "minimum clearance [m]": 3.21,
+            "minimum lead gap in lane [m]": None,
+            "lowest window score": 0.9,
+            "later replans median [ms]": 120.0,
+            "later replans p95 [ms]": 180.0,
+        }
+        path = tmp_path / f"lane_{name}_batch.json"
+        path.write_text(json.dumps({"table": table, "trials": []}))
+    text = lane.latex_table()
+    assert text.startswith(r"\begin{tabular}")
+    assert "(a) Merge & 4/5 & 3.2 & -- & 0.90 & 120 / 180" in text
+    assert (tmp_path / "lane_table.tex").exists()
+    with pytest.raises(FileNotFoundError, match="run lane_merge.yaml"):
+        lane.paper_figure()
