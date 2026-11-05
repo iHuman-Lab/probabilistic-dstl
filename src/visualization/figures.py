@@ -21,8 +21,16 @@ COLORS = {
     "workspace": "tab:gray",
     "score": "tab:purple",
     "ellipse": "tab:blue",
-    "traffic": "tab:red",
+    "traffic": "tab:gray",
     "target": "goldenrod",
+    # Yield zone: the light-fill / dark-edge purple of the 2D visit region.
+    "yield_fill": "#c5b0d5",
+    "yield_edge": "#9467bd",
+    # Non-drivable ramp end: the light-fill / dark-edge red of 2D obstacles.
+    "blocked_fill": "#ff9896",
+    "blocked_edge": "#d62728",
+    # Target lane: the light green of the 2D goal region.
+    "lane_fill": "#98df8a",
 }
 
 
@@ -283,9 +291,9 @@ def _draw_environment(ax, env, *, lane=False):
                     (region.xmin, region.ymin),
                     region.xmax - region.xmin,
                     region.ymax - region.ymin,
-                    facecolor=COLORS["target"],
-                    edgecolor=COLORS["target"],
-                    alpha=0.25,
+                    facecolor=COLORS["yield_fill"],
+                    edgecolor=COLORS["yield_edge"],
+                    alpha=0.4,
                     label="Yield region",
                 )
             )
@@ -850,12 +858,12 @@ def _draw_road(ax, env):
     """Shaded lanes (target lane green), edges, divider, ramp taper."""
     road = env.metadata["road"]
     ramp = env.metadata.get("ramp")
-    edge = {"color": "0.35", "linewidth": 0.8}
+    edge = {"color": "0.2", "linewidth": 1.1}
     ax.axhspan(
         road["lane_divider"],
         road["y_max"],
-        color=COLORS["goal"],
-        alpha=0.08,
+        color=COLORS["lane_fill"],
+        alpha=0.5,
         lw=0,
         label="Target lane",
     )
@@ -872,7 +880,7 @@ def _draw_road(ax, env):
             alpha=0.06,
             lw=0,
         )
-    divider = {"color": "0.55", "linewidth": 0.6, "linestyle": "--"}
+    divider = {"color": "0.3", "linewidth": 0.9, "linestyle": "--"}
     ax.axhline(road["y_max"], **edge)
     if ramp is None:
         ax.axhline(road["y_min"], **edge)
@@ -893,8 +901,12 @@ def _draw_road(ax, env):
             [start, end],
             [road["y_min"], middle],
             road["y_min"],
-            color="0.88",
-            lw=0,
+            facecolor=COLORS["blocked_fill"],
+            edgecolor=COLORS["blocked_edge"],
+            hatch="//",
+            alpha=0.9,
+            lw=0.8,
+            label="Ramp end",
         )
     if "yield" in env.regions:
         zone = env.region("yield")
@@ -903,17 +915,21 @@ def _draw_road(ax, env):
                 (zone.xmin, zone.ymin),
                 zone.xmax - zone.xmin,
                 zone.ymax - zone.ymin,
-                facecolor=COLORS["target"],
-                alpha=0.25,
-                lw=0,
+                facecolor=COLORS["yield_fill"],
+                edgecolor=COLORS["yield_edge"],
+                alpha=0.6,
+                lw=0.8,
                 label="Yield zone",
             )
         )
 
 
-def _draw_car(ax, center, size, color, *, heading=0.0, edge=None, label=None):
-    """A filled car footprint turned to `heading` (rad); `edge` outlines
-    a car the text refers to."""
+def _draw_car(
+    ax, center, size, color, *, heading=0.0, edge=None, label=None, alpha=0.9
+):
+    """A filled car footprint turned to `heading` (rad), outlined in a
+    darker shade of its colour; `edge` outlines a car the text refers to."""
+    outline = 0.6 * np.asarray(matplotlib.colors.to_rgb(color))
     car = ax.add_patch(
         VehiclePatch(
             center[0] - size["width"] / 2,
@@ -921,9 +937,9 @@ def _draw_car(ax, center, size, color, *, heading=0.0, edge=None, label=None):
             size["width"],
             size["height"],
             facecolor=color,
-            edgecolor=edge or color,
-            linewidth=0.9 if edge else 0.4,
-            alpha=0.9,
+            edgecolor=edge or tuple(outline),
+            linewidth=0.9 if edge else 0.6,
+            alpha=alpha,
             label=label,
             zorder=4,
         )
@@ -1028,68 +1044,191 @@ def _frame_strip(
     ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
 
 
-def plot_lane_paper(
-    wide,
-    short,
-    *,
-    short_title=None,
-    save_path=None,
-    show=False,
-    span=110.0,
-    short_span=40.0,
-    start=-5.0,
-    stretch=1.4,
-    show_uncertainty=False,
-):
-    """Full-width compact figure of simulation frames.
+SCORE_STYLES = (("tab:blue", "-"), ("tab:orange", "--"), ("tab:gray", ":"))
 
-    Wide strips on top, up to two short panels in the bottom row and the
-    legend beside them. All panels share one metres-per-inch scale along x;
-    the road is drawn `stretch` times taller than true scale so the cars
-    stay readable. Titles may hold matplotlib math (STIX, like IEEE text).
+
+def _time_label(ax, center, time):
+    """The time in seconds, written in white on a drawn ego car."""
+    ax.text(
+        center[0],
+        center[1],
+        f"{time:g}",
+        fontsize=PAPER_FONT - 1,
+        color="white",
+        ha="center",
+        va="center",
+        fontweight="bold",
+        zorder=6,
+    )
+
+
+def _ego_ghosts(ax, result, env, step, times, dt):
+    """Faded ego cars at earlier times, each labelled with its time.
 
     Args:
-        wide: (title, MPCResult, environment, step) per full-width strip.
-        short: Up to two such tuples for the bottom row.
-        short_title: One line above the whole bottom row (e.g. the formula
-            both short panels share).
+        ax: Axes of one frame.
+        result: MPCResult of the run.
+        env: Lane environment.
+        step: Step of the frame; only earlier times are drawn.
+        times: Times in seconds to draw.
+        dt: Step length in seconds.
+    """
+    drawn = []
+    for time in times:
+        k = round(time / dt)
+        state = _np(_ego_truth(result.states[k])) if k < step else None
+        # Skip a ghost that would sit on top of one already drawn.
+        if state is None or any(abs(state[0] - x) < 5.5 for x in drawn):
+            continue
+        drawn.append(state[0])
+        _draw_car(
+            ax,
+            state[:2],
+            env.metadata["ego_vehicle"],
+            COLORS["executed"],
+            heading=float(np.arctan2(state[3], max(state[2], 0.5))),
+            alpha=0.4,
+        )
+        _time_label(ax, state[:2], k * dt)
+    _time_label(ax, _np(_ego_truth(result.states[step])), step * dt)
+
+
+def _score_panel(ax, panels, dt, alpha, events, title):
+    """Each run's per-window lower score over time, with alpha and events.
+
+    Args:
+        ax: Axes for the panel.
+        panels: (title, result, env, step, ghosts, label) per run.
+        dt: Step length in seconds.
+        alpha: Threshold line, or None.
+        events: (time, text) pairs drawn as vertical lines.
+        title: Panel title.
+    """
+    end = 0.0
+    for index, (_t, result, _e, _s, _g, label) in enumerate(panels):
+        color, style = SCORE_STYLES[index]
+        scores = [plan.hard_interval[0] for plan in result.window_plans]
+        times = np.arange(len(scores)) * dt
+        end = max(end, len(scores) * dt)
+        ax.step(
+            times,
+            scores,
+            where="post",
+            color=color,
+            ls=style,
+            lw=1.0,
+            label=label,
+        )
+        final = result.states[-1]
+        done = final.true_completed or final.true_yield_completed
+        if done is not None:
+            # The first run's marker is hollow so a marker on top shows.
+            first = index == 0
+            ax.plot(
+                done * dt,
+                scores[min(done, len(scores) - 1)],
+                "o",
+                ms=5 if first else 3,
+                color=color,
+                mfc="none" if first else color,
+                zorder=5,
+            )
+    end += 0.2
+    if alpha is not None:
+        ax.axhline(alpha, color="0.3", lw=0.6, ls=(0, (1, 1)))
+        ax.text(
+            end,
+            alpha - 0.04,
+            r"$\alpha$",
+            fontsize=PAPER_FONT,
+            ha="right",
+            va="top",
+            color="0.3",
+        )
+    for time, text in events:
+        ax.axvline(time, color="0.6", lw=0.6)
+        ax.text(
+            time + 0.08,
+            0.6,
+            text,
+            fontsize=PAPER_FONT - 1,
+            va="bottom",
+            color="0.4",
+        )
+    ax.plot([], [], "o", color="0.3", ms=3, label="task done")
+    ax.set_xlim(0, end)
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel("time (s)", fontsize=PAPER_FONT, labelpad=0)
+    ax.set_ylabel("window ρ̲", fontsize=PAPER_FONT, labelpad=1)
+    ax.tick_params(labelsize=PAPER_FONT, length=2, pad=1)
+    for side in ("right", "top"):
+        ax.spines[side].set_visible(False)
+    ax.legend(
+        fontsize=PAPER_FONT - 1,
+        frameon=False,
+        loc="lower right",
+        handlelength=1.6,
+        borderaxespad=0.1,
+        labelspacing=0.2,
+    )
+    ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
+
+
+def plot_lane_paper(
+    panels,
+    *,
+    dt,
+    alpha=None,
+    events=(),
+    callout=None,
+    save_path=None,
+    show=False,
+    span=130.0,
+    short_span=40.0,
+    start=-5.0,
+    stretch=1.8,
+    show_uncertainty=False,
+):
+    """Full-width figure: one wide frame, two short frames, score panel.
+
+    The wide frame is on top; below it the short frames and a panel of each
+    run's per-window lower score over time. Every frame shares one metres-
+    per-inch scale along x; the road is drawn `stretch` times taller than
+    true scale so the cars stay readable. Each frame shows faded ego cars
+    at earlier times, labelled with the time. Font is DejaVu Sans.
+
+    Args:
+        panels: (title, MPCResult, environment, step, ghost times [s],
+            score label) for the wide frame, then up to two short frames.
+        dt: Step length in seconds.
+        alpha: Score threshold drawn in the score panel, or None.
+        events: (time, text) pairs marked in the score panel.
+        callout: (traffic car name, text) pointed at in the wide frame.
         save_path: Output path; a PDF and a 300 dpi PNG are written.
         show: Display the figure.
         span: Metres across the full width.
-        short_span: Metres shown in each short panel, at the same scale.
-        start: Left edge of every panel in metres.
+        short_span: Metres shown in each short frame, at the same scale.
+        start: Left edge of every frame in metres.
         stretch: How much taller than true scale the road is drawn.
-        show_uncertainty: Also draw the plan's predicted 95% region (worth it
-            only when the noise is large enough to see at this scale).
+        show_uncertainty: Also draw the plan's predicted 95% region.
 
     Returns:
-        (figure, axes) with the axes in panel order.
+        (figure, axes): the frame axes in panel order, then the score axes.
     """
-    if len(short) > 2 or not wide + short:
-        raise ValueError("plot_lane_paper needs runs and at most two short")
+    if not 1 <= len(panels) <= 3:
+        raise ValueError("plot_lane_paper needs one wide and up to two short")
     margin, gap = 0.04, 0.14  # in
-    title_h, ticks_h, label_h, row_gap = 0.16, 0.13, 0.15, 0.04
+    title_h, ticks_h, label_h, legend_h = 0.16, 0.13, 0.15, 0.17
     width = PAPER_WIDTH - 2 * margin
-    per_inch = span / width  # metres per inch along x, every panel
-    road = (wide + short)[0][2].metadata["road"]
+    per_inch = span / width  # metres per inch along x, every frame
+    road = panels[0][2].metadata["road"]
     ylim = (road["y_min"] - 0.4, road["y_max"] + 0.4)
     strip = (ylim[1] - ylim[0]) / per_inch * stretch
     short_w = short_span / per_inch
-    shared_h = title_h if short_title and short else 0.0
-    short_bottom = ticks_h + label_h if short else None
-    cursor = short_bottom + strip + title_h + shared_h if short else 0.0
-    wide_bottoms = []
-    for index in range(len(wide)):
-        # Wide strips show x ticks; only the lowest one carries "x (m)".
-        lowest = index == 0
-        cursor += (row_gap if short or index else 0.0) + ticks_h
-        if lowest and not short:
-            cursor += label_h
-        wide_bottoms.append(cursor)
-        cursor += strip + title_h
-    height = cursor + margin
-    wide_bottoms.reverse()
-    style = {"mathtext.fontset": "stix", "font.family": "STIXGeneral"}
+    bottom_row = ticks_h + label_h
+    top_row = bottom_row + strip + title_h + 0.06 + ticks_h
+    height = top_row + strip + title_h + legend_h + margin
+    style = {"mathtext.fontset": "dejavusans", "font.family": "DejaVu Sans"}
     with plt.rc_context(style):
         fig = plt.figure(figsize=(PAPER_WIDTH, height))
 
@@ -1104,67 +1243,65 @@ def plot_lane_paper(
             )
 
         axes = []
-        for (title, result, env, step), bottom in zip(wide, wide_bottoms):
-            ax = axes_at(margin, bottom, width)
+        for index, panel in enumerate(panels):
+            title, result, env, step, ghosts, _label = panel
+            if index == 0:
+                ax = axes_at(margin, top_row, width)
+                xlim = (start, start + span)
+            else:
+                left = margin + (index - 1) * (short_w + gap)
+                ax = axes_at(left, bottom_row, short_w)
+                xlim = (start, start + short_span)
             _frame_strip(
-                ax,
-                title,
-                result,
-                env,
-                step,
-                (start, start + span),
-                ylim,
-                show_uncertainty,
+                ax, title, result, env, step, xlim, ylim, show_uncertainty
             )
+            _ego_ghosts(ax, result, env, step, ghosts, dt)
+            if index:
+                ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=0)
             axes.append(ax)
-        for index, (title, result, env, step) in enumerate(short):
-            ax = axes_at(
-                margin + index * (short_w + gap), short_bottom, short_w
-            )
-            _frame_strip(
-                ax,
-                title,
-                result,
-                env,
-                step,
-                (start, start + short_span),
-                ylim,
-                show_uncertainty,
-            )
-            ax.set_xticks(np.arange(0, start + short_span, 10))
-            axes.append(ax)
-        for ax in axes[len(wide) :] if short else axes[-1:]:
-            ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=0)
-        if shared_h:
-            fig.text(
-                margin / PAPER_WIDTH,
-                (short_bottom + strip + title_h + 0.02) / height,
-                short_title,
-                fontsize=PAPER_FONT,
+        axes[0].set_xticks(np.arange(0, start + span, 20))
+        if callout is not None:
+            _title, result, env, step, _g, _l = panels[0]
+            name, text = callout
+            names = [car["name"] for car in env.metadata["traffic"]]
+            car = _np(_traffic_truth(result.states[step]))[names.index(name)]
+            axes[0].annotate(
+                text,
+                (car[0], car[1] + 0.9),
+                (car[0], car[1] + 2.6),
+                fontsize=PAPER_FONT - 1,
+                ha="center",
                 va="bottom",
+                color="0.25",
+                arrowprops={"arrowstyle": "-", "lw": 0.5, "color": "0.4"},
+                annotation_clip=False,
             )
+        left = margin + 2 * (short_w + gap) + 0.22
+        score = axes_at(left, bottom_row, PAPER_WIDTH - left - margin)
+        letter = chr(ord("a") + len(panels))
+        _score_panel(
+            score,
+            panels,
+            dt,
+            alpha,
+            events,
+            f"({letter}) per-window lower score ρ̲",
+        )
+        axes.append(score)
         handles = {}
-        for ax in axes:
+        for ax in axes[:-1]:
             for handle, label in zip(*ax.get_legend_handles_labels()):
                 handles.setdefault(label, handle)
-        legend_left = margin + 2 * (short_w + gap)
-        legend_ax = axes_at(
-            legend_left,
-            short_bottom if short else wide_bottoms[-1],
-            PAPER_WIDTH - legend_left - margin,
-            tall=strip + title_h,
-        )
-        legend_ax.set_axis_off()
-        legend_ax.legend(
+        fig.legend(
             handles.values(),
             handles.keys(),
-            loc="center left",
-            ncol=2,
+            loc="upper center",
+            ncol=len(handles),
             fontsize=PAPER_FONT - 1,
             frameon=False,
+            bbox_to_anchor=(0.5, 1.0),
             handlelength=1.4,
-            columnspacing=0.8,
-            borderaxespad=0.0,
+            columnspacing=1.0,
         )
         if save_path is not None:
             stem = Path(save_path).with_suffix("")

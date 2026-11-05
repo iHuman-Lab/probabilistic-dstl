@@ -887,21 +887,33 @@ LANE_DIR = "configs/scenarios/lane"
 #   "safe" includes the gore: no part of the car in the main lane before
 #   x = 20 m (A) or 0 m (C).
 FIGURE_SCENES = (
+    # (scene, title with {t} = frame time, frame time in s or None for when
+    #  the task was done on truth, ego ghost times in s, score label)
     (
         "merge",
-        (
-            "(a) Merge, t = 2.0 s:   □ safe ∧ ◇□ in-lane (1 s dwell in the"
-            " window), then settle"
-        ),
-        2.0,
+        "(a) Merge, {t:g} s:  □ safe ∧ merge (1 s in lane by 5 s), then"
+        " settle;  lead brakes at 4 s",
+        4.8,
+        (0, 1.6, 3.2),
+        "(a) merge",
     ),
     (
         "merge_or_yield",
-        "(b) Dense, t = 1.6 s:   □ safe ∧ (merge ∨ ◇□ stopped)",
-        1.6,
+        "(b) Dense, {t:g} s:  □ safe ∧ (merge ∨ ◇□ stop)",
+        None,
+        (0, 0.8),
+        "(b) dense",
     ),
-    ("merge_or_yield_gap", "(c) One gap open, t = 1.0 s:   same rule", 1.0),
+    (
+        "merge_or_yield_gap",
+        "(c) One gap, {t:g} s:  same rule",
+        None,
+        (0, 1.2),
+        "(c) gap",
+    ),
 )
+# The braking car pointed at in the wide frame and marked in the score panel.
+FIGURE_CALLOUT = "lead"
 # Rows of the paper table (scene, row name).
 TABLE_SCENES = (
     ("merge", "Merge"),
@@ -912,31 +924,66 @@ TABLE_SCENES = (
 
 
 def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
-    """The compact full-width lane figure from saved runs.
+    """The full-width lane figure from saved runs.
 
     Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
-    Each panel is the simulation at the scene's chosen time: every car,
-    the driven path, and the plan made then with its 95% regions. Writes
-    outputs/lane_paper.pdf and .png and returns (figure, axes).
+    The first scene is the wide frame, the others short frames, and a last
+    panel plots each run's per-window lower score. The callout car's brake
+    time in the first scene is marked in that panel.
+
+    Args:
+        scenes: Rows like FIGURE_SCENES.
+        save: Write outputs/lane_paper.pdf and .png.
+        show: Display the figure.
+
+    Returns:
+        (figure, axes) from `plot_lane_paper`.
     """
     from visualization.figures import plot_lane_paper
 
     panels = []
-    for name, title, time in scenes:
+    for name, title, time, ghosts, label in scenes:
         cfg = load_config(f"{LANE_DIR}/lane_{name}.yaml")
         path = output_path(f"lane_{name}", ".pt")
         if not path.exists():
             raise FileNotFoundError(f"run lane_{name}.yaml first ({path})")
         result = torch.load(path, weights_only=False)
-        step = min(round(time / cfg["dt"]), len(result.states) - 1)
+        step = _figure_step(result, cfg["dt"], time)
         env = build_lane_merge_environment(cfg)
-        panels.append((title, result, env, step))
+        title = title.format(t=step * cfg["dt"])
+        panels.append((title, result, env, step, ghosts, label))
+    cfg = load_config(f"{LANE_DIR}/lane_{scenes[0][0]}.yaml")
+    car = next(c for c in cfg["traffic"] if c["name"] == FIGURE_CALLOUT)
+    letter = scenes[0][4].split()[0]
     return plot_lane_paper(
-        panels[:1],
-        panels[1:],
+        panels,
+        dt=cfg["dt"],
+        alpha=cfg["planner"].get("alpha"),
+        events=((car["brake"]["at"], f"{FIGURE_CALLOUT} brakes {letter}"),),
+        callout=(FIGURE_CALLOUT, f"{FIGURE_CALLOUT}, braking"),
         save_path=output_path("lane_paper", ".pdf") if save else None,
         show=show,
     )
+
+
+def _figure_step(result, dt, time):
+    """The step a figure frame shows.
+
+    Args:
+        result: MPCResult of the run.
+        dt: Step length in seconds.
+        time: Frame time in seconds, or None for when the task was done on
+            truth (the last step if it never was).
+
+    Returns:
+        Step index into result.states.
+    """
+    last = len(result.states) - 1
+    if time is not None:
+        return min(round(time / dt), last)
+    final = result.states[-1]
+    done = final.true_completed or final.true_yield_completed
+    return last if done is None else min(done, last)
 
 
 def latex_table(scenes=TABLE_SCENES, *, save=True):

@@ -1313,28 +1313,35 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     from visualization.figures import PAPER_WIDTH, plot_lane_paper
 
     panels = []
-    for name, title, _time in lane.FIGURE_SCENES:
+    for name, title, _time, ghosts, label in lane.FIGURE_SCENES:
         cfg = load_config(f"configs/scenarios/lane/lane_{name}.yaml")
         cfg["planner"]["max_iters"] = 1
         cfg["warm_starts"] = cfg["warm_starts"][:1]
         s = lane.build(cfg, device="cpu")
-        panels.append((title, lane.trial(s, max_steps=2), s.env, 1))
-    fig, axes = plot_lane_paper(panels[:1], panels[1:])
+        result = lane.trial(s, max_steps=3)
+        panels.append((title.format(t=0.4), result, s.env, 2, ghosts, label))
+    fig, axes = plot_lane_paper(panels, dt=cfg["dt"], alpha=0.95)
     width, height = fig.get_size_inches()
-    assert width == PAPER_WIDTH and height < 2.4
-    assert len(axes) == 3
-    # Every panel shows the plan; the 95% region only when asked for.
-    for ax in axes:
+    assert width == PAPER_WIDTH and height < 2.8
+    assert len(axes) == 4  # three frames and the score panel
+    # Every frame shows the plan; the 95% region only when asked for.
+    for ax in axes[:3]:
         labels = set(ax.get_legend_handles_labels()[1])
         assert {"Current plan", "Ego", "Traffic"} <= labels
         assert "Predicted 95% region" not in labels
-    _fig, axes = plot_lane_paper(panels[:1], [], show_uncertainty=True)
+    # Ghost at 0 s (earlier than the frame) plus the frame ego, each labelled.
+    times = [t.get_text() for t in axes[1].texts if t.get_text()]
+    assert times == ["0", "0.4"]  # traffic motion arrows have no text
+    # The score panel has one line per run, labelled as given.
+    score_labels = axes[3].get_legend_handles_labels()[1]
+    assert score_labels[:3] == [row[4] for row in lane.FIGURE_SCENES]
+    _fig, axes = plot_lane_paper(panels, dt=cfg["dt"], show_uncertainty=True)
     assert "Predicted 95% region" in axes[0].get_legend_handles_labels()[1]
-    # Same metres per inch in every panel (to scale across panels).
+    # Same metres per inch in every frame (to scale across frames).
     scales = [
         (ax.get_xlim()[1] - ax.get_xlim()[0])
         / (ax.get_position().width * width)
-        for ax in axes
+        for ax in axes[:3]
     ]
     assert max(scales) == pytest.approx(min(scales))
     monkeypatch.setattr(runners, "RESULTS_DIR", tmp_path)
@@ -1371,3 +1378,17 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     assert (tmp_path / "lane_table.tex").exists()
     with pytest.raises(FileNotFoundError, match="run lane_merge.yaml"):
         lane.paper_figure()
+
+
+def test_figure_step_is_the_time_or_when_the_task_was_done():
+    def run(done, yielded, steps=10):
+        final = SimpleNamespace(
+            true_completed=done, true_yield_completed=yielded
+        )
+        return SimpleNamespace(states=[None] * (steps - 1) + [final])
+
+    assert lane._figure_step(run(None, None), 0.2, 1.0) == 5
+    assert lane._figure_step(run(None, None), 0.2, 9.0) == 9  # clipped
+    assert lane._figure_step(run(6, None), 0.2, None) == 6
+    assert lane._figure_step(run(None, 4), 0.2, None) == 4
+    assert lane._figure_step(run(None, None), 0.2, None) == 9  # never done
