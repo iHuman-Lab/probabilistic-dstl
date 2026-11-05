@@ -148,6 +148,12 @@ standard deviations as a positive scalar or four values (units m, m, m/s,
 m/s). Both default to `0.1` per component. These are illustrative sensor
 settings, independent of `q_std` and `traffic_q_std` (process noise).
 
+`traffic_filter_accel_std` (m/s^2, default 0) adds white-noise longitudinal
+acceleration to the traffic noise the Kalman filter assumes, so its estimate
+follows a car that brakes without warning. The merge configs set it to the
+brake size, 2.0. The true traffic and the planner's constant-velocity
+prediction keep `traffic_q_std`.
+
 The planner uses posterior means/covariances and estimates dwell progress
 from the posterior mean. The physical monitor independently tracks true dwell
 progress and evaluates success, collision, road and speed violations on truth.

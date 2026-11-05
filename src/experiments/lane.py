@@ -228,6 +228,7 @@ def trial(
             ego_observation_noise=ego_observation_noise,
             traffic_observation_noise=traffic_observation_noise,
             generator=generator,
+            filter_q=_filter_q(s, traffic_q),
         ),
         is_done=_outcome(s),
         max_steps=s.cfg["T_SIM"] if max_steps is None else max_steps,
@@ -361,6 +362,33 @@ def _present(result, s, *, stem, show, save):
     )
 
 
+def _filter_q(s, traffic_q):
+    """Traffic process noise the Kalman filter assumes.
+
+    The true traffic noise `traffic_q` plus white-noise longitudinal
+    acceleration of std `traffic_filter_accel_std` (m/s^2, default 0), so
+    the estimate can follow a car that brakes. The planner's prediction and
+    the true traffic keep `traffic_q`.
+
+    Args:
+        s: A built lane problem.
+        traffic_q: [4, 4] true traffic process noise.
+
+    Returns:
+        [4, 4] filter process noise.
+    """
+    sigma = s.cfg.get("traffic_filter_accel_std", 0.0)
+    dt = s.cfg["dt"]
+    block = sigma**2 * torch.tensor(
+        [[dt**4 / 4, dt**3 / 2], [dt**3 / 2, dt**2]],
+        dtype=traffic_q.dtype,
+        device=traffic_q.device,
+    )
+    q = traffic_q.clone()
+    q[0::2, 0::2] += block  # x and vx
+    return q
+
+
 def _executor(
     s,
     traffic_q,
@@ -371,7 +399,10 @@ def _executor(
     ego_observation_noise=None,
     traffic_observation_noise=None,
     generator=None,
+    filter_q=None,
 ):
+    filter_q = traffic_q if filter_q is None else filter_q
+
     def draw(sequence, step, reference, covariance):
         if sequence is not None:
             return sequence[step].to(reference)
@@ -390,7 +421,7 @@ def _executor(
         )
         mean, covariance = s.dyn.step(state.ego_mean, state.ego_cov, control)
         traffic_mean = state.traffic_mean @ s.dyn.A.T
-        traffic_cov = s.dyn.A @ state.traffic_cov @ s.dyn.A.T + traffic_q
+        traffic_cov = s.dyn.A @ state.traffic_cov @ s.dyn.A.T + filter_q
         observation = ego_true + draw(
             ego_observation_noise, step, ego_true, s.ego_observation_cov
         )

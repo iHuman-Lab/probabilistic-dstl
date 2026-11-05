@@ -1094,6 +1094,36 @@ def test_credited_dwell_may_finish_later_so_settling_can_follow():
     assert branch.probability_interval(beliefs)[0] == 1
 
 
+@pytest.mark.parametrize("accel_std,tracks", [(0.0, False), (2.0, True)])
+def test_filter_follows_a_braking_lead_only_with_acceleration_noise(
+    accel_std, tracks
+):
+    cfg = load_config("configs/scenarios/lane/lane_merge.yaml")
+    cfg["traffic_filter_accel_std"] = accel_std
+    s = lane.build(cfg, device="cpu")
+    state = lane.initial_state_of(s, generator=lane._generator(s))
+    state = state._replace(traffic_true=state.traffic_mean.clone())
+    steps, cars = 35, len(cfg["traffic"])
+    traffic_q = cfg["traffic_q_std"] ** 2 * torch.eye(4)
+    execute = lane._executor(
+        s,
+        traffic_q,
+        torch.zeros(steps, 4),
+        torch.zeros(steps, cars, 4),
+        False,
+        ego_observation_noise=torch.zeros(steps, 4),
+        traffic_observation_noise=torch.zeros(steps, cars, 4),
+        filter_q=lane._filter_q(s, traffic_q),
+    )
+    for step in range(steps):  # the lead brakes from 4 s to 6 s
+        state = execute(state, torch.zeros(2), step)
+    error = abs(float(state.traffic_mean[0, 2] - state.traffic_true[0, 2]))
+    assert (error < 0.3) == tracks
+    # Without the setting the filter noise is the true traffic noise.
+    if accel_std == 0.0:
+        torch.testing.assert_close(lane._filter_q(s, traffic_q), traffic_q)
+
+
 def _or_over_starts_branch(metadata, horizon):
     """The merge branch as built before the Eventually form: one Or per start.
 

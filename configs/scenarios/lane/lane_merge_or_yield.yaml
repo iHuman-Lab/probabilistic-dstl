@@ -24,6 +24,10 @@ traffic:
   - {name: target_front, x0: 11.0, y: 3.6, speed: 6.0, width: 4.5, height: 1.8}
   - {name: target_rear, x0: -7.0, y: 3.6, speed: 6.0, width: 4.5, height: 1.8}
 traffic_q_std: 0.005
+# The filter allows longitudinal acceleration of this std (m/s^2, the
+# brake size) so its estimate can follow a braking car; the planner still
+# predicts constant velocity from that estimate.
+traffic_filter_accel_std: 2.0
 traffic_cov_scale: 0.01
 safety_margin: {longitudinal: 0.5, lateral: 0.2}
 task:
