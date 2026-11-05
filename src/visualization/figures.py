@@ -851,6 +851,7 @@ def plot_lane_snapshots(
 # --- Paper figure ---------------------------------------------------------------
 
 PAPER_WIDTH = 7.16  # in, IEEE two-column text width
+COLUMN_WIDTH = 3.5  # in, IEEE column width
 PAPER_FONT = 7  # pt
 
 
@@ -1187,28 +1188,80 @@ def _score_panel(ax, panels, dt, alpha, events, title):
     ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
 
 
+def _paper_layout(column, road_height, span, short_span, stretch):
+    """Panel rectangles for the two-column or the one-column figure.
+
+    Every frame has the same metres per inch along x. Two-column: the wide
+    frame on top, then two short frames and the score panel in one row.
+    One-column: the wide frame, then the two short frames side by side,
+    then the score panel across the full width.
+
+    Args:
+        column: One-column layout instead of two-column.
+        road_height: Shown road height in metres.
+        span: Metres across the wide frame.
+        short_span: Metres in each short frame (two-column only; one-column
+            short frames take half the width each).
+        stretch: How much taller than true scale the road is drawn.
+
+    Returns:
+        (width, height, rectangles, short_span, legend_columns): sizes in
+        inches; rectangles (left, bottom, width, height) for the wide frame,
+        the two short frames and the score panel.
+    """
+    margin, gap = 0.04, 0.14
+    title_h, ticks_h, label_h = 0.16, 0.13, 0.15
+    fig_w = COLUMN_WIDTH if column else PAPER_WIDTH
+    width = fig_w - 2 * margin
+    per_inch = span / width  # metres per inch along x, every frame
+    strip = road_height / per_inch * stretch
+    axis_row = ticks_h + label_h  # x ticks and "x (m)" / "time (s)"
+    if column:
+        legend_h, score_h, ylabel_w = 0.3, 0.8, 0.3
+        short_w = (width - gap) / 2
+        short_span = short_w * per_inch
+        score = (margin + ylabel_w, axis_row, width - ylabel_w, score_h)
+        short_bottom = axis_row + score_h + title_h + 0.06 + axis_row
+    else:
+        legend_h = 0.17
+        short_w = short_span / per_inch
+        short_bottom = axis_row
+        left = margin + 2 * (short_w + gap) + 0.22
+        score = (left, axis_row, fig_w - left - margin, strip)
+    shorts = [
+        (margin + index * (short_w + gap), short_bottom, short_w, strip)
+        for index in range(2)
+    ]
+    wide_bottom = short_bottom + strip + title_h + 0.06 + ticks_h
+    height = wide_bottom + strip + title_h + legend_h + margin
+    wide = (margin, wide_bottom, width, strip)
+    legend_columns = 4 if column else 8
+    return fig_w, height, [wide, *shorts, score], short_span, legend_columns
+
+
 def plot_lane_paper(
     panels,
     *,
     dt,
     alpha=None,
     events=(),
-    short_title=None,
+    column=False,
     save_path=None,
     show=False,
-    span=130.0,
+    span=None,
     short_span=40.0,
     start=-5.0,
-    stretch=1.8,
+    stretch=None,
     show_uncertainty=False,
 ):
-    """Full-width figure: one wide frame, two short frames, score panel.
+    """Paper figure: one wide frame, two short frames, score panel.
 
-    The wide frame is on top; below it the short frames and a panel of each
-    run's per-window lower score over time. Every frame shares one metres-
-    per-inch scale along x; the road is drawn `stretch` times taller than
-    true scale so the cars stay readable. Each frame shows faded ego cars
-    at earlier times, tagged with the time. Font is DejaVu Sans.
+    Two-column (IEEE text width) or one-column (`column=True`) layout; see
+    `_paper_layout`. Every frame shares one metres-per-inch scale along x;
+    the road is drawn `stretch` times taller than true scale so the cars
+    stay readable. Each frame shows faded ego cars at earlier times, tagged
+    with the time. The last panel is each run's per-window lower score.
+    Font is DejaVu Sans, embedded as TrueType.
 
     Args:
         panels: (title, MPCResult, environment, step, ghost times [s],
@@ -1216,14 +1269,14 @@ def plot_lane_paper(
         dt: Step length in seconds.
         alpha: Score threshold drawn in the score panel, or None.
         events: (time, text) pairs marked in the score panel.
-        short_title: One line above both short frames (the formula they
-            share), or None.
+        column: One-column layout.
         save_path: Output path; a PDF and a 300 dpi PNG are written.
         show: Display the figure.
-        span: Metres across the full width.
-        short_span: Metres shown in each short frame, at the same scale.
+        span: Metres across the wide frame (default 130, one-column 105).
+        short_span: Metres in each short frame (two-column only).
         start: Left edge of every frame in metres.
-        stretch: How much taller than true scale the road is drawn.
+        stretch: How much taller than true scale the road is drawn
+            (default 1.8, one-column 2.2).
         show_uncertainty: Also draw the plan's predicted 95% region.
 
     Returns:
@@ -1231,18 +1284,15 @@ def plot_lane_paper(
     """
     if not 1 <= len(panels) <= 3:
         raise ValueError("plot_lane_paper needs one wide and up to two short")
-    margin, gap = 0.04, 0.14  # in
-    title_h, ticks_h, label_h, legend_h = 0.16, 0.13, 0.15, 0.17
-    width = PAPER_WIDTH - 2 * margin
-    per_inch = span / width  # metres per inch along x, every frame
+    if span is None:
+        span = 105.0 if column else 130.0
+    if stretch is None:
+        stretch = 2.2 if column else 1.8
     road = panels[0][2].metadata["road"]
     ylim = (road["y_min"] - 0.4, road["y_max"] + 0.4)
-    strip = (ylim[1] - ylim[0]) / per_inch * stretch
-    short_w = short_span / per_inch
-    bottom_row = ticks_h + label_h
-    shared_h = title_h if short_title else 0.0
-    top_row = bottom_row + strip + title_h + shared_h + 0.06 + ticks_h
-    height = top_row + strip + title_h + legend_h + margin
+    fig_w, height, rects, short_span, ncol = _paper_layout(
+        column, ylim[1] - ylim[0], span, short_span, stretch
+    )
     style = {
         "mathtext.fontset": "dejavusans",
         "font.family": "DejaVu Sans",
@@ -1250,28 +1300,18 @@ def plot_lane_paper(
         "pdf.fonttype": 42,
     }
     with plt.rc_context(style):
-        fig = plt.figure(figsize=(PAPER_WIDTH, height))
+        fig = plt.figure(figsize=(fig_w, height))
 
-        def axes_at(left, bottom, size, tall=strip):
+        def axes_at(left, bottom, size, tall):
             return fig.add_axes(
-                [
-                    left / PAPER_WIDTH,
-                    bottom / height,
-                    size / PAPER_WIDTH,
-                    tall / height,
-                ]
+                [left / fig_w, bottom / height, size / fig_w, tall / height]
             )
 
         axes = []
         for index, panel in enumerate(panels):
             title, result, env, step, ghosts, _label = panel
-            if index == 0:
-                ax = axes_at(margin, top_row, width)
-                xlim = (start, start + span)
-            else:
-                left = margin + (index - 1) * (short_w + gap)
-                ax = axes_at(left, bottom_row, short_w)
-                xlim = (start, start + short_span)
+            ax = axes_at(*rects[index])
+            xlim = (start, start + (short_span if index else span))
             _frame_strip(
                 ax, title, result, env, step, xlim, ylim, show_uncertainty
             )
@@ -1280,24 +1320,10 @@ def plot_lane_paper(
                 ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=0)
             axes.append(ax)
         axes[0].set_xticks(np.arange(0, start + span, 20))
-        if shared_h:
-            fig.text(
-                margin / PAPER_WIDTH,
-                (bottom_row + strip + title_h + 0.01) / height,
-                short_title,
-                fontsize=PAPER_FONT,
-                va="bottom",
-            )
-        left = margin + 2 * (short_w + gap) + 0.22
-        score = axes_at(left, bottom_row, PAPER_WIDTH - left - margin)
+        score = axes_at(*rects[3])
         letter = chr(ord("a") + len(panels))
         _score_panel(
-            score,
-            panels,
-            dt,
-            alpha,
-            events,
-            f"({letter}) per-window lower score ρ̲",
+            score, panels, dt, alpha, events, f"({letter}) ρ̲ per window"
         )
         axes.append(score)
         handles = {}
@@ -1308,12 +1334,13 @@ def plot_lane_paper(
             handles.values(),
             handles.keys(),
             loc="upper center",
-            ncol=len(handles),
+            ncol=ncol,
             fontsize=PAPER_FONT - 1,
             frameon=False,
             bbox_to_anchor=(0.5, 1.0),
             handlelength=1.4,
             columnspacing=1.0,
+            labelspacing=0.3,
         )
         if save_path is not None:
             stem = Path(save_path).with_suffix("")

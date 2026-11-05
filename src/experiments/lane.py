@@ -888,24 +888,11 @@ LANE_DIR = "configs/scenarios/lane"
 #   x = 20 m (A) or 0 m (C).
 FIGURE_SCENES = (
     # (scene, title, frame time in s or None for when the task was done on
-    #  truth, ego ghost times in s, score label). Titles are the formulas in
-    #  absolute seconds; "lane" includes the ramp-end check, "settled" is
-    #  lane AND |v_y| <= 0.3.
-    (
-        "merge",
-        "(a)  □ safe ∧ ◇$_{[2.5,4]}$(□$_{[0,1]}$ lane ∧"
-        r" □$_{[1,\infty)}$ settled)",
-        4.8,
-        (0, 1.6, 3.2),
-        "(a) merge",
-    ),
-    ("merge_or_yield", "(b)", None, (0, 0.8), "(b) dense"),
-    ("merge_or_yield_gap", "(c)", None, (0, 1.2), "(c) gap"),
-)
-# The formula (b) and (c) share, written once above both.
-FIGURE_SHORT_TITLE = (
-    "□ safe ∧ (◇$_{[0.8,3.4]}$(□$_{[0,0.6]}$ lane ∧"
-    r" □$_{[0.6,\infty)}$ settled) ∨ □$_{[4,\infty)}$ stop)"
+    #  truth, ego ghost times in s, score label). The formulas go in the
+    #  caption.
+    ("merge", "(a) Merge", 4.8, (0, 1.6, 3.2), "(a) merge"),
+    ("merge_or_yield", "(b) Dense traffic", None, (0, 0.8), "(b) dense"),
+    ("merge_or_yield_gap", "(c) One open gap", None, (0, 1.2), "(c) gap"),
 )
 # The braking car whose brake time is marked in the score panel.
 FIGURE_EVENT_CAR = "lead"
@@ -919,7 +906,7 @@ TABLE_SCENES = (
 
 
 def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
-    """The full-width lane figure from saved runs.
+    """The lane paper figure from saved runs, in both page layouts.
 
     Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
     The first scene is the wide frame, the others short frames, and a last
@@ -928,11 +915,12 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
 
     Args:
         scenes: Rows like FIGURE_SCENES.
-        save: Write outputs/lane_paper.pdf and .png.
-        show: Display the figure.
+        save: Write outputs/lane_paper.pdf (two-column) and
+            outputs/lane_paper_column.pdf (one-column), each with a PNG.
+        show: Display the figures.
 
     Returns:
-        (figure, axes) from `plot_lane_paper`.
+        {"two_column": (figure, axes), "one_column": (figure, axes)}.
     """
     from visualization.figures import plot_lane_paper
 
@@ -949,15 +937,23 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
     cfg = load_config(f"{LANE_DIR}/lane_{scenes[0][0]}.yaml")
     car = next(c for c in cfg["traffic"] if c["name"] == FIGURE_EVENT_CAR)
     letter = scenes[0][4].split()[0]
-    return plot_lane_paper(
-        panels,
-        dt=cfg["dt"],
-        alpha=cfg["planner"].get("alpha"),
-        events=((car["brake"]["at"], f"{FIGURE_EVENT_CAR} brakes {letter}"),),
-        short_title=FIGURE_SHORT_TITLE,
-        save_path=output_path("lane_paper", ".pdf") if save else None,
-        show=show,
-    )
+    figures = {}
+    for key, stem, column in (
+        ("two_column", "lane_paper", False),
+        ("one_column", "lane_paper_column", True),
+    ):
+        figures[key] = plot_lane_paper(
+            panels,
+            dt=cfg["dt"],
+            alpha=cfg["planner"].get("alpha"),
+            events=(
+                (car["brake"]["at"], f"{FIGURE_EVENT_CAR} brakes {letter}"),
+            ),
+            column=column,
+            save_path=output_path(stem, ".pdf") if save else None,
+            show=show,
+        )
+    return figures
 
 
 def _figure_step(result, dt, time):

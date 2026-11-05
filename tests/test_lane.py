@@ -1310,7 +1310,11 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     import json
 
     from planning import runners
-    from visualization.figures import PAPER_WIDTH, plot_lane_paper
+    from visualization.figures import (
+        COLUMN_WIDTH,
+        PAPER_WIDTH,
+        plot_lane_paper,
+    )
 
     panels = []
     for name, title, _time, ghosts, label in lane.FIGURE_SCENES:
@@ -1320,9 +1324,7 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
         s = lane.build(cfg, device="cpu")
         result = lane.trial(s, max_steps=3)
         panels.append((title, result, s.env, 2, ghosts, label))
-    fig, axes = plot_lane_paper(
-        panels, dt=cfg["dt"], alpha=0.95, short_title=lane.FIGURE_SHORT_TITLE
-    )
+    fig, axes = plot_lane_paper(panels, dt=cfg["dt"], alpha=0.95)
     width, height = fig.get_size_inches()
     assert width == PAPER_WIDTH and height < 2.8
     assert len(axes) == 4  # three frames and the score panel
@@ -1337,14 +1339,28 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     assert [t.get_text() for t in tags] == ["0 s", "0.4 s"]
     ego_y = float(panels[1][1].states[2].ego_true[1])
     assert tags[1].get_position()[1] > ego_y + 0.9  # half the car height
-    # The shared formula is written once above the short frames.
-    assert lane.FIGURE_SHORT_TITLE in [t.get_text() for t in fig.texts]
+    # One short title line per frame; the formulas go in the caption.
+    assert [ax.get_title(loc="left") for ax in axes[:3]] == [
+        row[1] for row in lane.FIGURE_SCENES
+    ]
     # The score panel has one line per run, labelled as given.
     score_labels = axes[3].get_legend_handles_labels()[1]
     assert score_labels[:3] == [row[4] for row in lane.FIGURE_SCENES]
     _fig, axes = plot_lane_paper(panels, dt=cfg["dt"], show_uncertainty=True)
     assert "Predicted 95% region" in axes[0].get_legend_handles_labels()[1]
     # Same metres per inch in every frame (to scale across frames).
+    scales = [
+        (ax.get_xlim()[1] - ax.get_xlim()[0])
+        / (ax.get_position().width * width)
+        for ax in axes[:3]
+    ]
+    assert max(scales) == pytest.approx(min(scales))
+    # One-column version: column width, score panel under the frames, and
+    # still one scale across all frames.
+    fig, axes = plot_lane_paper(panels, dt=cfg["dt"], column=True)
+    width, height = fig.get_size_inches()
+    assert width == COLUMN_WIDTH and height < 3.8
+    assert axes[3].get_position().y1 < axes[1].get_position().y0
     scales = [
         (ax.get_xlim()[1] - ax.get_xlim()[0])
         / (ax.get_position().width * width)

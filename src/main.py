@@ -65,10 +65,10 @@ with skip_run("skip", "LaneBatch") as check, check():
         lane.batch(f"{LANE}/lane_{name}.yaml", seeds=range(20))
 
 
-# 10. Paper outputs: the full-width figure of merge, dense and gap with the
-#     per-window lower score of each, from the runs saved by blocks 5, 7 and 8
-#     (outputs/lane_paper.pdf), and
-#     the LaTeX table of all four scenes from block 9 (outputs/lane_table.tex).
+# 10. Paper outputs: the figure of merge, dense and gap with the per-window
+#     lower score of each, from the runs saved by blocks 5, 7 and 8, in two
+#     layouts (two-column outputs/lane_paper.pdf, one-column
+#     outputs/lane_paper_column.pdf), and the LaTeX table of all four scenes from block 9 (outputs/lane_table.tex).
 with skip_run("skip", "LanePaper") as check, check():
     lane.paper_figure()
     lane.latex_table()
