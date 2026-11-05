@@ -8,7 +8,7 @@ from math import ceil, floor, hypot, isclose, isfinite
 
 import numpy as np
 
-from pdstl.operators import Always, And, Eventually, Or
+from pdstl.operators import Always, And, Eventually, Or, Until
 from pdstl.predicates import (
     AxisInterval,
     GreaterThan,
@@ -500,6 +500,8 @@ def _lane_merge_task(metadata, horizon, target, settled):
     Before any dwell credit the branch is
     F[start, latest] (G[0,d] lane AND G[d,d] before_end
                       AND G[d,inf) (lane AND settled)).
+    Once in the lane it is
+    lane U[remaining, latest] (before_end AND G[0,inf) (lane AND settled)).
 
     Args:
         metadata: Lane metadata of the local window (step, streak, task).
@@ -516,10 +518,6 @@ def _lane_merge_task(metadata, horizon, target, settled):
     dwell = task["dwell_steps"]  # number of elapsed transitions
     absolute_start, absolute_end = task["start_end_steps"]
     credit = lane_dwell_credit(metadata, step, streak)
-
-    def stay_from(start):
-        """Remain in the target lane with settled lateral speed afterwards."""
-        return Always(target & settled, [start, horizon])
 
     if metadata.get("completed"):
         # Dwell is done: no timing or ramp-end check. Stay in the lane, and be
@@ -563,22 +561,29 @@ def _lane_merge_task(metadata, horizon, target, settled):
     remaining = dwell - (credit - 1)
     if step + remaining > absolute_end:
         raise ValueError("lane task has no remaining feasible dwell start")
-    # Already in the lane: the dwell may finish at its earliest step or at any
-    # later one up to the deadline, as long as the car stays in. The lane must
-    # hold from now to a variable finish, so this stays an Or over finishes.
-    candidates = [
-        completion_from_start(0, finish)
-        for finish in range(remaining, min(absolute_end - step, horizon) + 1)
-    ]
-    completion = reduce(Or, [formula for formula, _finish in candidates])
-    stay = reduce(Or, [stay_from(finish) for _formula, finish in candidates])
+    # Already in the lane: the dwell may finish at any step f from its
+    # earliest one to the deadline, with the lane held from now through f.
+    # That is target U[remaining, latest] (finish check), one Until instead
+    # of an Or over f. The Frechet And lower is max(0, sum - (n - 1)) for any
+    # grouping, so the lower bound equals the Or over finishes.
+    finishes = [remaining, min(absolute_end - step, horizon)]
+    stay = Always(target & settled, [0, np.inf])
+    ramp = metadata.get("ramp")
+    if ramp is None:
+        return {
+            "complete": Always(target, [0, remaining]),
+            "stay": Eventually(stay, finishes),
+            "branch": Until(target, stay, finishes),
+        }
+    front_limit = ramp["end_x"] - metadata["ego_vehicle"]["width"] / 2
+    before_end = LessThan(front_limit, dim=0, name="Front before ramp end")
     # Safety covers the whole window, not just up to the dwell finish, so
     # the plan cannot drift off the road or into traffic after completing.
-    branch = reduce(
-        Or,
-        [formula & stay_from(finish) for formula, finish in candidates],
-    )
-    return {"complete": completion, "stay": stay, "branch": branch}
+    return {
+        "complete": Until(target, before_end, finishes),
+        "stay": Eventually(stay, finishes),
+        "branch": Until(target, before_end & stay, finishes),
+    }
 
 
 def _dwell_credit(task, step, streak):

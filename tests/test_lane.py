@@ -1156,37 +1156,110 @@ def _or_over_starts_branch(metadata, horizon):
     return reduce(Or, candidates)
 
 
+def _or_over_finishes_branch(metadata, horizon):
+    """The in-lane merge branch as built before the Until form.
+
+    Args:
+        metadata: Lane metadata of a local window with dwell credit.
+        horizon: Last step of the planning window.
+
+    Returns:
+        OR_f (G[0,f] lane AND G[f,f] before_end
+              AND G[f,H] (lane AND settled)).
+    """
+    task = metadata["task"]
+    step, dwell = metadata["step"], task["dwell_steps"]
+    first, deadline = task["start_end_steps"]
+    credit = min(metadata["streak"], step - first + 1, dwell + 1)
+    center, tolerance = task["target_center"], task["target_tolerance"]
+    target = AxisInterval(center - tolerance, center + tolerance, dim=1)
+    speed = task["settle_lateral_speed"]
+    settled = AxisInterval(-speed, speed, dim=3)
+    front = metadata["ramp"]["end_x"] - metadata["ego_vehicle"]["width"] / 2
+    before_end = LessThan(front, dim=0)
+    candidates = []
+    last = min(deadline - step, horizon)
+    for finish in range(dwell - (credit - 1), last + 1):
+        completion = Always(target, [0, finish]) & Always(
+            before_end, [finish, finish]
+        )
+        candidates.append(
+            completion & Always(target & settled, [finish, horizon])
+        )
+    return reduce(Or, candidates)
+
+
+def _random_beliefs(env, generator, horizon, in_lane):
+    """Random ego beliefs near the lane and the ramp end, traffic far away.
+
+    Args:
+        env: Lane environment.
+        generator: Torch generator.
+        horizon: Last step of the window.
+        in_lane: Stay in the target lane throughout, instead of entering
+            it at a random step.
+
+    Returns:
+        LaneBeliefTrajectory with one sample.
+    """
+    steps, cars = horizon + 1, len(env.metadata["traffic"])
+    switch = int(torch.randint(0, steps, (1,), generator=generator))
+    speed = 1.5 + 1.5 * torch.rand(1, generator=generator)
+    ego = torch.zeros(1, steps, 4)
+    # x starts 40 m before the ramp-end limit, so before_end matters.
+    front = env.metadata["ramp"]["end_x"] - 2.25
+    ego[0, :, 0] = front - 40.0 + speed * torch.arange(steps)
+    ego[0, 0 if in_lane else switch :, 1] = env.metadata["task"][
+        "target_center"
+    ]
+    ego[..., 1] += 0.4 * torch.randn(1, steps, generator=generator)
+    ego[..., 3] = 0.3 * torch.randn(1, steps, generator=generator)
+    variance = 0.01 + 0.3 * torch.rand(1, steps, 4, generator=generator)
+    return LaneBeliefTrajectory(
+        ego,
+        torch.diag_embed(variance),
+        torch.full((1, steps, cars, 4), -100.0),
+        torch.zeros(1, steps, cars, 4, 4),
+        [car["name"] for car in env.metadata["traffic"]],
+    )
+
+
+@pytest.mark.parametrize("step, streak", [(14, 2), (16, 4), (20, 1)])
+def test_in_lane_until_has_the_or_over_finishes_lower_bound(step, streak):
+    env = build_lane_merge_environment(
+        load_config("configs/scenarios/lane/lane_merge.yaml")
+    )
+    horizon = 30
+    window = lane_local_window(env, step, streak)
+    new = lane_subformulas(window, horizon)["branch"]
+    old = _or_over_finishes_branch(window.metadata, horizon)
+    generator = torch.Generator().manual_seed(step)
+    lowers = []
+    for _ in range(24):
+        beliefs = _random_beliefs(env, generator, horizon, in_lane=True)
+        lower, upper = new.probability_interval(beliefs).tolist()
+        assert lower == pytest.approx(
+            old.probability_interval(beliefs)[0].item(), abs=1e-6
+        )
+        assert upper >= lower
+        lowers.append(lower)
+    assert max(lowers) > 0.1  # the comparison is not only zeros
+
+
 @pytest.mark.parametrize("step", [0, 6, 14])
 def test_merge_eventually_has_the_or_over_starts_lower_bound(step):
     env = build_lane_merge_environment(
         load_config("configs/scenarios/lane/lane_merge.yaml")
     )
-    task, horizon = env.metadata["task"], 30
+    horizon = 30
     window = lane_local_window(env, step)
     new = lane_subformulas(window, horizon)["branch"]
     old = _or_over_starts_branch(window.metadata, horizon)
     generator = torch.Generator().manual_seed(step)
-    steps, cars = horizon + 1, len(env.metadata["traffic"])
     lowers = []
     for _ in range(24):
         # Ego crosses into the lane at a random step, at a random speed.
-        cross = int(torch.randint(0, steps, (1,), generator=generator))
-        speed = 1.5 + 1.5 * torch.rand(1, generator=generator)
-        ego = torch.zeros(1, steps, 4)
-        # x starts 40 m before the ramp-end limit, so before_end matters.
-        front = env.metadata["ramp"]["end_x"] - 2.25
-        ego[0, :, 0] = front - 40.0 + speed * torch.arange(steps)
-        ego[0, cross:, 1] = task["target_center"]
-        ego[..., 1] += 0.4 * torch.randn(1, steps, generator=generator)
-        ego[..., 3] = 0.3 * torch.randn(1, steps, generator=generator)
-        variance = 0.01 + 0.3 * torch.rand(1, steps, 4, generator=generator)
-        beliefs = LaneBeliefTrajectory(
-            ego,
-            torch.diag_embed(variance),
-            torch.full((1, steps, cars, 4), -100.0),
-            torch.zeros(1, steps, cars, 4, 4),
-            [car["name"] for car in env.metadata["traffic"]],
-        )
+        beliefs = _random_beliefs(env, generator, horizon, in_lane=False)
         lower, upper = new.probability_interval(beliefs).tolist()
         assert lower == pytest.approx(
             old.probability_interval(beliefs)[0].item(), abs=1e-6
