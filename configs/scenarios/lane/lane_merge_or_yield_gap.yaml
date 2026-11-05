@@ -13,7 +13,9 @@ observation:
   ego_std: [0.1, 0.1, 0.1, 0.1]
   traffic_std: [0.1, 0.1, 0.1, 0.1]
 road: {y_min: -1.8, y_max: 5.4, lane_divider: 1.8}
-ramp: {start_x: 28.0, end_x: 72.0}
+# Parallel on-ramp: no merging before the gore, then a 50 m full-width lane
+# and a 90 m taper (about the 300 ft AASHTO parallel-entrance taper).
+ramp: {gore_x: 0.0, start_x: 50.0, end_x: 140.0}
 goal: {x_range: [-10.0, 150.0], y_range: [1.8, 5.4]}
 ego_vehicle: {width: 4.5, height: 1.8}
 traffic:

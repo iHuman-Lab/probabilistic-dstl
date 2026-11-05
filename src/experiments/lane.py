@@ -837,8 +837,11 @@ LANE_DIR = "configs/scenarios/lane"
 # at t = 0 (absolute deadlines, kept by every replan), for the caption:
 #   A: G[0,6] safe AND M(1 s, [2.6, 4.0] s)
 #   C: G[0,6] safe AND (M(0.6 s, [0.8, 3.4] s) OR F[2.4,4.0] G[0,inf) stop)
-#   M(d, I) = F_I (G[0,d] lane AND F[d,d] x <= 69.75
+#   M(d, I) = F_I (G[0,d] lane AND F[d,d] x <= x_end
 #                  AND G[d,inf) (lane AND |v_y| <= 0.3))
+#   x_end = ramp end - half the car length: 157.75 m (A), 137.75 m (C).
+#   "safe" includes the gore: no part of the car in the main lane before
+#   x = 20 m (A) or 0 m (C).
 FIGURE_SCENES = (
     (
         "merge",

@@ -240,8 +240,17 @@ def _draw_environment(ax, env, *, lane=False):
             )
             ax.plot(x, lower, color=COLORS["workspace"], linewidth=1.3)
             ax.axhline(road["y_max"], color=COLORS["workspace"], linewidth=1.3)
+            gore = ramp.get("gore_x")
+            if gore is not None:
+                ax.plot(
+                    [extent[0], gore],
+                    [road["lane_divider"], road["lane_divider"]],
+                    color=COLORS["workspace"],
+                    linewidth=1.3,
+                    label="Gore (no merging)",
+                )
             ax.plot(
-                [extent[0], start],
+                [extent[0] if gore is None else gore, start],
                 [road["lane_divider"], road["lane_divider"]],
                 color=COLORS["workspace"],
                 linestyle="--",
@@ -874,7 +883,12 @@ def _draw_road(ax, env):
         ax.plot(
             [-1e3, start, end, 1e3], [road["y_min"]] * 2 + [middle] * 2, **edge
         )
-        ax.plot([-1e3, start], [middle] * 2, **divider)
+        gore = ramp.get("gore_x")
+        if gore is None:
+            ax.plot([-1e3, start], [middle] * 2, **divider)
+        else:
+            ax.plot([-1e3, gore], [middle] * 2, **edge)  # separate roads
+            ax.plot([gore, start], [middle] * 2, **divider)
         ax.fill_between(
             [start, end],
             [road["y_min"], middle],

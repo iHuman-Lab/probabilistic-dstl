@@ -121,6 +121,13 @@ road checks use the full vehicle footprint plus safety margins. A merge
 succeeds only when the target-lane dwell finishes inside the time window and
 before the ramp end. Each planning window reports its exact [ρ̲_φ, ρ̄_φ].
 
+The merge configs use a parallel on-ramp, `ramp: {gore_x, start_x, end_x}`:
+no part of the ego may be in the main lane upstream of `gore_x` (the ramp is
+a separate road there), the ramp lane is full width from `gore_x` to
+`start_x` (50 m) and tapers to zero at `end_x` (90 m, about the 300 ft AASHTO
+parallel-entrance taper). Without `gore_x` the ramp lane runs alongside the
+main lane all the way upstream, as before.
+
 Each window's formula is reach-and-stay: safe over the whole horizon, finish
 the dwell in time, then remain in the target lane with lateral speed within
 `task.settle_lateral_speed` (default 0.3 m/s) until the horizon end. Once the

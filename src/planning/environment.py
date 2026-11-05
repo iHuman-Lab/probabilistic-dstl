@@ -11,6 +11,7 @@ import numpy as np
 from pdstl.operators import Always, And, Eventually, Or
 from pdstl.predicates import (
     AxisInterval,
+    GreaterThan,
     HalfSpace,
     InsideRectangle,
     LessThan,
@@ -674,7 +675,11 @@ def _lane_yield_task(metadata, horizon):
 
 
 def lane_road_predicate(metadata):
-    """Contain the complete axis-aligned ego footprint inside the road."""
+    """Contain the complete axis-aligned ego footprint inside the road.
+
+    With a ramp: the ramp lane tapers from start_x to end_x, and with
+    `gore_x` the footprint may not reach the main lane upstream of the gore.
+    """
     road = metadata["road"]
     ramp = metadata.get("ramp")
     ego = metadata["ego_vehicle"]
@@ -706,7 +711,18 @@ def lane_road_predicate(metadata):
         slope * start - road["y_min"] - half_height - slope * half_width,
         name="Above ramp edge",
     )
-    return outer & (after_taper | above_taper)
+    road_atom = outer & (after_taper | above_taper)
+    if ramp.get("gore_x") is None:
+        return road_atom
+    # Upstream of the gore the ramp is a separate road: the footprint may
+    # reach into the main lane only once all of it is past the gore.
+    in_ramp_lane = LessThan(
+        road["lane_divider"] - half_height, dim=1, name="Ramp lane"
+    )
+    past_gore = GreaterThan(
+        ramp["gore_x"] + half_width, dim=0, name="Past the gore"
+    )
+    return road_atom & (in_ramp_lane | past_gore)
 
 
 def lane_collision_extents(metadata, vehicle):
@@ -746,6 +762,13 @@ def lane_contains_footprint(environment, x, y):
     ):
         return False
     ramp = metadata.get("ramp")
+    gore = None if ramp is None else ramp.get("gore_x")
+    if (
+        gore is not None
+        and y + half_height > road["lane_divider"]
+        and x - half_width < gore
+    ):
+        return False  # reaches into the main lane before the gore
     if ramp is None or y - half_height >= road["lane_divider"]:
         return True
     slope = (road["lane_divider"] - road["y_min"]) / (
@@ -946,6 +969,8 @@ def build_lane_merge_environment(config, device="cpu"):
     ramp = config.get("ramp")
     if ramp is not None and not ramp["start_x"] < ramp["end_x"]:
         raise ValueError("ramp needs start_x < end_x")
+    if ramp is not None and ramp.get("gore_x", -np.inf) > ramp["start_x"]:
+        raise ValueError("ramp needs gore_x <= start_x")
     traffic = config["traffic"]
     names = [car["name"] for car in traffic]
     if not names or len(set(names)) != len(names):

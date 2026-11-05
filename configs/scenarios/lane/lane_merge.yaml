@@ -18,7 +18,9 @@ observation:
 # the planner is not told: it predicts constant speeds and replans from the
 # measurements.
 road: {y_min: -1.8, y_max: 5.4, lane_divider: 1.8}
-ramp: {start_x: 28.0, end_x: 72.0}
+# Parallel on-ramp: no merging before the gore, then a 50 m full-width lane
+# and a 90 m taper (about the 300 ft AASHTO parallel-entrance taper).
+ramp: {gore_x: 20.0, start_x: 70.0, end_x: 160.0}
 goal: {x_range: [-10.0, 200.0], y_range: [1.8, 5.4]}
 ego_vehicle: {width: 4.5, height: 1.8}
 traffic:

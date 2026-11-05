@@ -22,6 +22,7 @@ from planning.environment import (
     lane_headway_violated,
     lane_lead_gap,
     lane_local_window,
+    lane_road_predicate,
     lane_subformulas,
     lane_traffic_acceleration,
     lane_yield_contains,
@@ -145,9 +146,14 @@ def test_physical_post_merge_retention_and_headway():
     cfg = load_config("configs/scenarios/lane/lane_headway.yaml")
     s = lane.build(cfg, device="cpu")
     state = lane.initial_state_of(s)
-    # 10 m behind a lead 30 m ahead: a 15.5 m bumper gap, under the 22 m rule.
-    true = torch.tensor([10.0, 3.6, 18.0, 0.0])
-    state = state._replace(ego_true=true, true_completed=20)
+    # Past the gore, 20 m behind the lead: a 15.5 m bumper gap, under 22 m.
+    ahead = state.traffic_true.clone()
+    ahead[:, 0] += 40.0
+    lead = float(ahead[0, 0])
+    true = torch.tensor([lead - 20.0, 3.6, 18.0, 0.0])
+    state = state._replace(
+        ego_true=true, traffic_true=ahead, true_completed=20
+    )
     assert lane._outcome(s)(state, 21) == "headway_violation"
     true = true.clone()
     true[1] = 0.8
@@ -156,7 +162,7 @@ def test_physical_post_merge_retention_and_headway():
     )
     traffic = state.traffic_true.clone()
     traffic[:, 0] = 100
-    drifting = torch.tensor([0.0, 3.6, 18.0, 0.4])
+    drifting = torch.tensor([40.0, 3.6, 18.0, 0.4])
     drift = state._replace(ego_true=drifting, traffic_true=traffic)
     deadline = s.env.metadata["task"]["start_end_steps"][1]
     # Unsettled is allowed until the latest dwell finish, then it fails.
@@ -314,7 +320,7 @@ def test_yield_geometry_speed_and_validation():
         outside[dim] = value
         assert not lane_yield_contains(env, outside)
     cfg = load_config("configs/scenarios/lane/lane_merge_or_yield.yaml")
-    cfg["task"]["yield"]["x_range"] = [10.0, 29.0]
+    cfg["task"]["yield"]["x_range"] = [10.0, cfg["ramp"]["start_x"] + 1.0]
     with pytest.raises(ValueError, match="upstream"):
         build_lane_merge_environment(cfg)
 
@@ -461,7 +467,7 @@ def test_road_contains_the_whole_vehicle_and_taper_front_corner():
         load_config("configs/scenarios/lane/lane_merge.yaml")
     )
     road, ramp = merge.metadata["road"], merge.metadata["ramp"]
-    x = 40.0
+    x = ramp["start_x"] + 20.0
     front = x + merge.metadata["ego_vehicle"]["width"] / 2
     slope = (road["lane_divider"] - road["y_min"]) / (
         ramp["end_x"] - ramp["start_x"]
@@ -886,6 +892,40 @@ def test_lane_figures_have_time_labels_red_traffic_and_final_score(
     plt.close("all")
 
 
+@pytest.mark.parametrize(
+    "rear_past_gore,y,inside",
+    [
+        (-0.01, 0.9, True),  # in the ramp lane: fine before the gore
+        (-0.01, 0.91, False),  # reaches the main lane before the gore
+        (0.0, 0.91, True),  # whole car past the gore
+        (0.0, 3.6, True),
+    ],
+)
+def test_gore_forbids_the_main_lane_upstream(rear_past_gore, y, inside):
+    env = build_lane_merge_environment(
+        load_config("configs/scenarios/lane/lane_merge.yaml")
+    )
+    half_width = env.metadata["ego_vehicle"]["width"] / 2
+    x = env.metadata["ramp"]["gore_x"] + half_width + rear_past_gore
+    assert lane_contains_footprint(env, x, y) == inside
+    # The planner's road atom agrees with the truth check.
+    ego = torch.tensor([[[x, y, 0.0, 0.0]]])
+    road = lane_road_predicate(env.metadata)
+    traffic = torch.full((1, 1, len(env.metadata["traffic"]), 4), -100.0)
+    trace = road(_deterministic_lane_beliefs(env, ego, traffic))
+    assert trace[0, 0, 0].item() == float(inside)
+
+
+def test_ramp_without_gore_keeps_the_old_road():
+    cfg = load_config("configs/scenarios/lane/lane_merge.yaml")
+    del cfg["ramp"]["gore_x"]
+    env = build_lane_merge_environment(cfg)
+    assert lane_contains_footprint(env, 0.0, 0.91)
+    cfg["ramp"]["gore_x"] = cfg["ramp"]["start_x"] + 1.0
+    with pytest.raises(ValueError, match="gore_x <= start_x"):
+        build_lane_merge_environment(cfg)
+
+
 def test_merge_shades_only_the_taper_triangle():
     config = load_config("configs/scenarios/lane/lane_merge.yaml")
     problem = lane.build(config, device="cpu")
@@ -1103,7 +1143,9 @@ def test_merge_eventually_has_the_or_over_starts_lower_bound(step):
         cross = int(torch.randint(0, steps, (1,), generator=generator))
         speed = 1.5 + 1.5 * torch.rand(1, generator=generator)
         ego = torch.zeros(1, steps, 4)
-        ego[0, :, 0] = speed * torch.arange(steps)
+        # x starts 40 m before the ramp-end limit, so before_end matters.
+        front = env.metadata["ramp"]["end_x"] - 2.25
+        ego[0, :, 0] = front - 40.0 + speed * torch.arange(steps)
         ego[0, cross:, 1] = task["target_center"]
         ego[..., 1] += 0.4 * torch.randn(1, steps, generator=generator)
         ego[..., 3] = 0.3 * torch.randn(1, steps, generator=generator)
