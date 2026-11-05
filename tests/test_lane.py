@@ -1319,8 +1319,10 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
         cfg["warm_starts"] = cfg["warm_starts"][:1]
         s = lane.build(cfg, device="cpu")
         result = lane.trial(s, max_steps=3)
-        panels.append((title.format(t=0.4), result, s.env, 2, ghosts, label))
-    fig, axes = plot_lane_paper(panels, dt=cfg["dt"], alpha=0.95)
+        panels.append((title, result, s.env, 2, ghosts, label))
+    fig, axes = plot_lane_paper(
+        panels, dt=cfg["dt"], alpha=0.95, short_title=lane.FIGURE_SHORT_TITLE
+    )
     width, height = fig.get_size_inches()
     assert width == PAPER_WIDTH and height < 2.8
     assert len(axes) == 4  # three frames and the score panel
@@ -1329,9 +1331,14 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
         labels = set(ax.get_legend_handles_labels()[1])
         assert {"Current plan", "Ego", "Traffic"} <= labels
         assert "Predicted 95% region" not in labels
-    # Ghost at 0 s (earlier than the frame) plus the frame ego, each labelled.
-    times = [t.get_text() for t in axes[1].texts if t.get_text()]
-    assert times == ["0", "0.4"]  # traffic motion arrows have no text
+    # Ghost at 0 s (earlier than the frame) plus the frame ego, each tagged
+    # above the car, outside it.
+    tags = [t for t in axes[1].texts if t.get_text()]  # arrows have no text
+    assert [t.get_text() for t in tags] == ["0 s", "0.4 s"]
+    ego_y = float(panels[1][1].states[2].ego_true[1])
+    assert tags[1].get_position()[1] > ego_y + 0.9  # half the car height
+    # The shared formula is written once above the short frames.
+    assert lane.FIGURE_SHORT_TITLE in [t.get_text() for t in fig.texts]
     # The score panel has one line per run, labelled as given.
     score_labels = axes[3].get_legend_handles_labels()[1]
     assert score_labels[:3] == [row[4] for row in lane.FIGURE_SCENES]

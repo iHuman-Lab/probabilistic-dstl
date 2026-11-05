@@ -1047,23 +1047,35 @@ def _frame_strip(
 SCORE_STYLES = (("tab:blue", "-"), ("tab:orange", "--"), ("tab:gray", ":"))
 
 
-def _time_label(ax, center, time):
-    """The time in seconds, written in white on a drawn ego car."""
+def _time_label(ax, center, size, time):
+    """A time tag such as "1.6 s" just above a drawn ego car.
+
+    Args:
+        ax: Axes of the frame.
+        center: Car centre (x, y).
+        size: Car size dict with "height".
+        time: Time in seconds.
+    """
     ax.text(
         center[0],
-        center[1],
-        f"{time:g}",
+        center[1] + size["height"] / 2 + 0.25,
+        f"{time:g} s",
         fontsize=PAPER_FONT - 1,
-        color="white",
+        color=COLORS["executed"],
         ha="center",
-        va="center",
-        fontweight="bold",
+        va="bottom",
         zorder=6,
+        bbox={
+            "boxstyle": "round,pad=0.12",
+            "fc": "white",
+            "ec": "none",
+            "alpha": 0.85,
+        },
     )
 
 
 def _ego_ghosts(ax, result, env, step, times, dt):
-    """Faded ego cars at earlier times, each labelled with its time.
+    """Faded ego cars at earlier times, each tagged with its time.
 
     Args:
         ax: Axes of one frame.
@@ -1089,8 +1101,9 @@ def _ego_ghosts(ax, result, env, step, times, dt):
             heading=float(np.arctan2(state[3], max(state[2], 0.5))),
             alpha=0.4,
         )
-        _time_label(ax, state[:2], k * dt)
-    _time_label(ax, _np(_ego_truth(result.states[step])), step * dt)
+        _time_label(ax, state[:2], env.metadata["ego_vehicle"], k * dt)
+    now = _np(_ego_truth(result.states[step]))
+    _time_label(ax, now[:2], env.metadata["ego_vehicle"], step * dt)
 
 
 def _score_panel(ax, panels, dt, alpha, events, title):
@@ -1180,7 +1193,7 @@ def plot_lane_paper(
     dt,
     alpha=None,
     events=(),
-    callout=None,
+    short_title=None,
     save_path=None,
     show=False,
     span=130.0,
@@ -1195,7 +1208,7 @@ def plot_lane_paper(
     run's per-window lower score over time. Every frame shares one metres-
     per-inch scale along x; the road is drawn `stretch` times taller than
     true scale so the cars stay readable. Each frame shows faded ego cars
-    at earlier times, labelled with the time. Font is DejaVu Sans.
+    at earlier times, tagged with the time. Font is DejaVu Sans.
 
     Args:
         panels: (title, MPCResult, environment, step, ghost times [s],
@@ -1203,7 +1216,8 @@ def plot_lane_paper(
         dt: Step length in seconds.
         alpha: Score threshold drawn in the score panel, or None.
         events: (time, text) pairs marked in the score panel.
-        callout: (traffic car name, text) pointed at in the wide frame.
+        short_title: One line above both short frames (the formula they
+            share), or None.
         save_path: Output path; a PDF and a 300 dpi PNG are written.
         show: Display the figure.
         span: Metres across the full width.
@@ -1226,9 +1240,15 @@ def plot_lane_paper(
     strip = (ylim[1] - ylim[0]) / per_inch * stretch
     short_w = short_span / per_inch
     bottom_row = ticks_h + label_h
-    top_row = bottom_row + strip + title_h + 0.06 + ticks_h
+    shared_h = title_h if short_title else 0.0
+    top_row = bottom_row + strip + title_h + shared_h + 0.06 + ticks_h
     height = top_row + strip + title_h + legend_h + margin
-    style = {"mathtext.fontset": "dejavusans", "font.family": "DejaVu Sans"}
+    style = {
+        "mathtext.fontset": "dejavusans",
+        "font.family": "DejaVu Sans",
+        # Embed TrueType, not Type 3, fonts (IEEE PDF checks reject Type 3).
+        "pdf.fonttype": 42,
+    }
     with plt.rc_context(style):
         fig = plt.figure(figsize=(PAPER_WIDTH, height))
 
@@ -1260,21 +1280,13 @@ def plot_lane_paper(
                 ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=0)
             axes.append(ax)
         axes[0].set_xticks(np.arange(0, start + span, 20))
-        if callout is not None:
-            _title, result, env, step, _g, _l = panels[0]
-            name, text = callout
-            names = [car["name"] for car in env.metadata["traffic"]]
-            car = _np(_traffic_truth(result.states[step]))[names.index(name)]
-            axes[0].annotate(
-                text,
-                (car[0], car[1] + 0.9),
-                (car[0], car[1] + 2.6),
-                fontsize=PAPER_FONT - 1,
-                ha="center",
+        if shared_h:
+            fig.text(
+                margin / PAPER_WIDTH,
+                (bottom_row + strip + title_h + 0.01) / height,
+                short_title,
+                fontsize=PAPER_FONT,
                 va="bottom",
-                color="0.25",
-                arrowprops={"arrowstyle": "-", "lw": 0.5, "color": "0.4"},
-                annotation_clip=False,
             )
         left = margin + 2 * (short_w + gap) + 0.22
         score = axes_at(left, bottom_row, PAPER_WIDTH - left - margin)

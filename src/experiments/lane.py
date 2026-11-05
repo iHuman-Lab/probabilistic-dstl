@@ -887,33 +887,28 @@ LANE_DIR = "configs/scenarios/lane"
 #   "safe" includes the gore: no part of the car in the main lane before
 #   x = 20 m (A) or 0 m (C).
 FIGURE_SCENES = (
-    # (scene, title with {t} = frame time, frame time in s or None for when
-    #  the task was done on truth, ego ghost times in s, score label)
+    # (scene, title, frame time in s or None for when the task was done on
+    #  truth, ego ghost times in s, score label). Titles are the formulas in
+    #  absolute seconds; "lane" includes the ramp-end check, "settled" is
+    #  lane AND |v_y| <= 0.3.
     (
         "merge",
-        "(a) Merge, {t:g} s:  □ safe ∧ merge (1 s in lane by 5 s), then"
-        " settle;  lead brakes at 4 s",
+        "(a)  □ safe ∧ ◇$_{[2.5,4]}$(□$_{[0,1]}$ lane ∧"
+        r" □$_{[1,\infty)}$ settled)",
         4.8,
         (0, 1.6, 3.2),
         "(a) merge",
     ),
-    (
-        "merge_or_yield",
-        "(b) Dense, {t:g} s:  □ safe ∧ (merge ∨ ◇□ stop)",
-        None,
-        (0, 0.8),
-        "(b) dense",
-    ),
-    (
-        "merge_or_yield_gap",
-        "(c) One gap, {t:g} s:  same rule",
-        None,
-        (0, 1.2),
-        "(c) gap",
-    ),
+    ("merge_or_yield", "(b)", None, (0, 0.8), "(b) dense"),
+    ("merge_or_yield_gap", "(c)", None, (0, 1.2), "(c) gap"),
 )
-# The braking car pointed at in the wide frame and marked in the score panel.
-FIGURE_CALLOUT = "lead"
+# The formula (b) and (c) share, written once above both.
+FIGURE_SHORT_TITLE = (
+    "□ safe ∧ (◇$_{[0.8,3.4]}$(□$_{[0,0.6]}$ lane ∧"
+    r" □$_{[0.6,\infty)}$ settled) ∨ □$_{[4,\infty)}$ stop)"
+)
+# The braking car whose brake time is marked in the score panel.
+FIGURE_EVENT_CAR = "lead"
 # Rows of the paper table (scene, row name).
 TABLE_SCENES = (
     ("merge", "Merge"),
@@ -928,7 +923,7 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
 
     Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
     The first scene is the wide frame, the others short frames, and a last
-    panel plots each run's per-window lower score. The callout car's brake
+    panel plots each run's per-window lower score. The event car's brake
     time in the first scene is marked in that panel.
 
     Args:
@@ -950,17 +945,16 @@ def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
         result = torch.load(path, weights_only=False)
         step = _figure_step(result, cfg["dt"], time)
         env = build_lane_merge_environment(cfg)
-        title = title.format(t=step * cfg["dt"])
         panels.append((title, result, env, step, ghosts, label))
     cfg = load_config(f"{LANE_DIR}/lane_{scenes[0][0]}.yaml")
-    car = next(c for c in cfg["traffic"] if c["name"] == FIGURE_CALLOUT)
+    car = next(c for c in cfg["traffic"] if c["name"] == FIGURE_EVENT_CAR)
     letter = scenes[0][4].split()[0]
     return plot_lane_paper(
         panels,
         dt=cfg["dt"],
         alpha=cfg["planner"].get("alpha"),
-        events=((car["brake"]["at"], f"{FIGURE_CALLOUT} brakes {letter}"),),
-        callout=(FIGURE_CALLOUT, f"{FIGURE_CALLOUT}, braking"),
+        events=((car["brake"]["at"], f"{FIGURE_EVENT_CAR} brakes {letter}"),),
+        short_title=FIGURE_SHORT_TITLE,
         save_path=output_path("lane_paper", ".pdf") if save else None,
         show=show,
     )
