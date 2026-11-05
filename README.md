@@ -138,7 +138,9 @@ monitoring truth, and reports `success` only after that settling period.
 
 Lane simulation keeps physical truth separate from the planner's beliefs.
 Initial ego and traffic states are sampled from the configured Gaussian
-priors. After each action, the simulator advances those true states with
+priors, except that true traffic starts with zero lateral speed, so cars keep
+their lane instead of drifting across it (the belief prior on that speed is
+unchanged). After each action, the simulator advances those true states with
 process noise, generates independent noisy observations of `[x, y, vx, vy]`,
 and applies a full-state Kalman update to the predicted beliefs. The first
 planning window uses the prior; the first observation follows its action.

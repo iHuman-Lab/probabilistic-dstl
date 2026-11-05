@@ -246,7 +246,19 @@ def trial(
 
 
 def initial_state_of(s, *, generator=None):
-    """Sample physical initial states from the unchanged Gaussian priors."""
+    """Sample physical initial states from the unchanged Gaussian priors.
+
+    Traffic keeps its lane: its true lateral speed starts at zero, so a car
+    cannot drift across the lane over the run. The belief prior on that speed
+    is unchanged, so the planner still does not know it is zero.
+
+    Args:
+        s: Lane problem from `build`.
+        generator: Torch generator for the samples.
+
+    Returns:
+        LaneState with beliefs at the priors and sampled true states.
+    """
     traffic = s.cfg["traffic"]
     mean = torch.tensor(
         [[car["x0"], car["y"], car["speed"], 0.0] for car in traffic],
@@ -257,6 +269,7 @@ def initial_state_of(s, *, generator=None):
     covariance = covariance.clone() * s.cfg["traffic_cov_scale"]
     ego_true = sample_gaussian(*s.state, generator=generator)
     traffic_true = sample_gaussian(mean, covariance, generator=generator)
+    traffic_true[:, 3] = 0.0
     streak = success_counter(s.env, s.state[0], 0)
     true_streak = success_counter(s.env, ego_true, 0)
     return LaneState(

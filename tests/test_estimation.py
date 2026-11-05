@@ -94,7 +94,7 @@ def test_filter_error_covariance_matches_monte_carlo_under_feedback():
     assert ((coverage > 0.94) & (coverage < 0.96)).all()
 
 
-def test_lane_initial_truth_is_sampled_from_each_configured_prior():
+def test_lane_initial_truth_is_sampled_from_each_configured_prior_in_lane():
     s = problem()
     generator = torch.Generator().manual_seed(8)
     states = [
@@ -109,13 +109,15 @@ def test_lane_initial_truth_is_sampled_from_each_configured_prior():
     torch.testing.assert_close(
         traffic.mean(0), states[0].traffic_mean, atol=0.007, rtol=0
     )
+    # Traffic keeps its lane: x, y, vx follow the prior, vy is exactly zero.
     for car in range(3):
         torch.testing.assert_close(
-            torch.cov(traffic[:, car].T),
-            states[0].traffic_cov[car],
+            torch.cov(traffic[:, car, :3].T),
+            states[0].traffic_cov[car, :3, :3],
             atol=0.001,
             rtol=0,
         )
+    assert (traffic[..., 3] == 0).all()
     torch.testing.assert_close(states[-1].ego_mean, s.state[0])
     torch.testing.assert_close(states[-1].ego_cov, s.state[1])
 
