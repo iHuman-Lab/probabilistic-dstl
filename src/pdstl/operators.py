@@ -117,6 +117,11 @@ class Predicate(STL_Formula):
         return True
 
     def robustness_trace(self, belief_trajectory, validate=True, **kwargs):
+        # A trajectory with a bounds cache scores each atom once: the bounds
+        # do not depend on beta, so a smooth and an exact pass share them.
+        cache = getattr(belief_trajectory, "bounds_cache", None)
+        if cache is not None and self in cache:
+            return cache[self]
         # A trajectory that can score every step at once does so; otherwise, step by step.
         score_all = getattr(belief_trajectory, "probability_bounds", None)
         if score_all is not None:
@@ -127,6 +132,8 @@ class Predicate(STL_Formula):
             )
         if validate:
             check_probability_bounds(trace, self)
+        if cache is not None:
+            cache[self] = trace
         return trace
 
     def __str__(self):
@@ -273,7 +280,14 @@ def _checked_interval(interval):
 
 
 class Temporal_Operator(STL_Formula):
-    """Window reduction (min: Always, max: Eventually) run backwards; beta > 0 smooths."""
+    """Window reduction (min: Always, max: Eventually); beta > 0 smooths.
+
+    A bounded window [a, b] is reduced in one step at every origin. A window
+    that runs to the trace end, [a, inf), is folded pairwise from the end:
+    each origin combines the next origin's value with the value a steps
+    ahead, starting from the last value (repeated while the a-step delay
+    fills). That fold is one cumulative reduction over the whole trace.
+    """
 
     symbol = None  # subclasses set self.operation to Minish() or Maxish()
 
@@ -284,84 +298,65 @@ class Temporal_Operator(STL_Formula):
         self._interval = (
             [0, np.inf] if self.interval is None else self.interval
         )
-
-        a, b = self._interval
-        self._unbounded = np.isinf(b)
-        # [0, inf) is the same window as no interval: the rest of the trace.
-        self._suffix = interval is None or (self._unbounded and int(a) == 0)
-
-        if self._suffix:
-            self.rnn_dim = 1
-        elif self._unbounded:
-            self.rnn_dim = int(a)
-        else:
-            self.rnn_dim = int(b) + 1
-
-        # Shift register: M drops the oldest slot, b writes the newest one.
-        self.register_buffer(
-            "M", torch.tensor(np.diag(np.ones(self.rnn_dim - 1), k=1)).float()
-        )
-        b_vec = torch.zeros(self.rnn_dim, 1)
-        b_vec[-1] = 1.0
-        self.register_buffer("b", b_vec)
+        self._unbounded = np.isinf(self._interval[1])
 
     @property
     def lookahead(self):
-        """Future steps one evaluation needs (0 for a suffix window)."""
+        """Future steps one evaluation needs (a for [a, inf), else b)."""
         a, b = self._interval
-        if self._suffix:
-            return 0
         return int(a) if self._unbounded else int(b)
 
-    def _initialize_rnn_cell(self, x):
-        """Register pre-filled with the first reversed value; those outputs are dropped."""
-        h0 = (
-            x[:, :1, :].expand(-1, self.rnn_dim, -1).clone()
-        )  # [B, rnn_dim, 2]
-        if self._unbounded and not self._suffix:  # [a, inf), a > 0
-            return ((x[:, :1, :], h0), 0.0)
-        return (h0, 0.0)
-
-    def _apply_shift(self, h0, x):
-        """M @ h0 + b * x, applied to each interval endpoint."""
-        batch, rnn_dim, bounds = h0.shape
-        M = self.M.to(dtype=h0.dtype, device=h0.device)
-        b = self.b.to(dtype=h0.dtype, device=h0.device)
-        h0_flat = h0.permute(0, 2, 1).reshape(-1, rnn_dim)  # [B*2, rnn_dim]
-        shifted = (
-            torch.matmul(h0_flat, M.t())
-            .reshape(batch, bounds, rnn_dim)
-            .permute(0, 2, 1)
+    def _window_trace(self, trace, beta):
+        """[a, b]: reduce trace[t + a : t + b + 1] at every origin t."""
+        a, b = int(self._interval[0]), int(self._interval[1])
+        # [B, origins, 2, n] -> [B, origins, n, 2]
+        windows = trace[:, a:].unfold(1, b - a + 1, 1).transpose(-1, -2)
+        return _reduce_bounds(
+            self.operation, windows, beta, dim=2, keepdim=False
         )
-        return shifted + b.view(1, -1, 1) * x.squeeze(1).unsqueeze(1)
 
-    def _rnn_cell(self, x, hc, beta=None):
-        h0, _ = hc
-        if self._suffix:  # [t, end of trace]
-            output = _reduce_bounds(
-                self.operation, torch.cat([h0, x], dim=1), beta
-            )
-            state = (output, None)
-        elif self._unbounded:  # [a, inf), a > 0
-            d0, h0 = h0
-            dh = torch.cat([d0, h0[:, :1, :]], dim=1)
-            output = _reduce_bounds(self.operation, dh, beta)
-            state = ((output, self._apply_shift(h0, x)), None)
-        else:  # [a, b]: slot rnn_dim-1-k holds the value k steps ahead
-            a, b = int(self._interval[0]), int(self._interval[1])
-            new_h0 = self._apply_shift(h0, x)
-            output = _reduce_bounds(
-                self.operation, new_h0[:, : b - a + 1, :], beta
-            )
-            state = (new_h0, None)
-        return output, state
+    def _tail_trace(self, trace, beta):
+        """[a, inf): fold pairs from the trace end (see the class docstring).
 
-    def _run_cell(self, x, beta):
-        outputs, hc = [], self._initialize_rnn_cell(x)
-        for x_i in torch.split(x, 1, dim=1):
-            o, hc = self._rnn_cell(x_i, hc, beta)
-            outputs.append(o)
-        return torch.cat(outputs, dim=1)
+        With beta, a pair reduction adds the two values' exp(+-beta * value)
+        on one endpoint (the shifted one) and averages them on the other, so
+        the fold is a cumulative logsumexp; averaging halves the running sum
+        each step, hence the j * log(2) weights.
+        """
+        a = int(self._interval[0])
+        steps = trace.shape[1]
+        last = trace[:, -1:]
+        # Order the backward pass meets the values in: a copies of the last
+        # value while the delay fills, then the trace from its end.
+        folded = torch.cat([last.expand(-1, a, -1), trace.flip(1)], dim=1)
+        folded = folded[:, :steps]
+        if beta is None:
+            cumulative = (
+                torch.cummin
+                if isinstance(self.operation, Minish)
+                else torch.cummax
+            )
+            result = cumulative(folded, dim=1).values
+        else:
+            sign = -1.0 if isinstance(self.operation, Minish) else 1.0
+            # The endpoint whose pair reduction is a plain sum in exp space:
+            # the lower for a min, the upper for a max.
+            summed = 0 if sign < 0 else 1
+            log_start = sign * beta * last
+            log_values = sign * beta * folded
+            ln2 = math.log(2.0)
+            j = torch.arange(steps, dtype=trace.dtype, device=trace.device)
+            weights = (j * ln2).view(1, -1, 1)
+            averaged = torch.logaddexp(
+                log_start, torch.logcumsumexp(log_values + weights, dim=1)
+            ) - (weights + ln2)
+            added = torch.logaddexp(
+                log_start, torch.logcumsumexp(log_values, dim=1)
+            )
+            ends = [averaged[..., 0], averaged[..., 1]]
+            ends[summed] = added[..., summed]
+            result = _pair(*ends) / (sign * beta)
+        return result[:, a:].flip(1)
 
     def robustness_trace(
         self, belief_trajectory, beta=None, keepdim=True, **kwargs
@@ -374,11 +369,9 @@ class Temporal_Operator(STL_Formula):
                 f"{self}: one evaluation origin needs {self.lookahead + 1} steps, "
                 f"child trace has {trace.shape[1]}"
             )
-        # Run backwards so each origin sees its future; drop incomplete windows.
-        output_reversed = self._run_cell(
-            torch.flip(trace, dims=[1]), beta=beta
-        )
-        return torch.flip(output_reversed[:, self.lookahead :], dims=[1])
+        if self._unbounded:
+            return self._tail_trace(trace, beta)
+        return self._window_trace(trace, beta)
 
     def __str__(self):
         if self.interval is None:
@@ -441,6 +434,8 @@ class Until(STL_Formula):
                 f"child traces have {T}"
             )
 
+        if not np.isinf(self._interval[1]):
+            return self._window_trace(phi, psi, n_valid, a, b, beta)
         results = []
         for t in range(n_valid):
             candidates = []
@@ -459,6 +454,40 @@ class Until(STL_Formula):
                 )
             )
         return torch.stack(results, dim=1)
+
+    def _window_trace(self, phi, psi, n_valid, a, b, beta):
+        """Bounded [a, b] at every origin at once (the loop's values).
+
+        Each origin's window phi[t : t + b + 1] gives every prefix min
+        phi[t .. tau] as one cumulative reduction; the prefixes ending at
+        tau = t + a .. t + b meet psi(tau), and the best one is kept.
+        """
+
+        def windows(trace):  # [B, n_valid, b + 1, 2]
+            return (
+                trace[:, : n_valid + b].unfold(1, b + 1, 1).transpose(-1, -2)
+            )
+
+        phi_windows, psi_windows = windows(phi), windows(psi)
+        if beta is None:
+            prefix = torch.cummin(phi_windows, dim=2).values
+        else:
+            # Prefix of length n: lower -logsumexp(-beta x) / beta (sound
+            # shift included), upper the normalized soft-min.
+            log_sums = torch.logcumsumexp(-beta * phi_windows, dim=2)
+            length = torch.arange(
+                1, b + 2, dtype=phi.dtype, device=phi.device
+            ).view(1, 1, -1)
+            prefix = _pair(
+                -log_sums[..., 0] / beta,
+                -(log_sums[..., 1] - torch.log(length)) / beta,
+            )
+        candidates = _conjunction(
+            prefix[:, :, a:], psi_windows[:, :, a:], beta
+        )
+        return _reduce_bounds(
+            self.max_op, candidates, beta, dim=2, keepdim=False
+        )
 
     def __str__(self):
         return f"({self.left}) U_{self._interval} ({self.right})"
