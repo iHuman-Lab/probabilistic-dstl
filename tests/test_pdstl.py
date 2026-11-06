@@ -595,9 +595,7 @@ def test_always_and_eventually_match_direct_window_reductions(interval):
     [None, [0, np.inf], [3, np.inf], [0, 0], [0, 4], [2, 7], [5, 5]],
 )
 @pytest.mark.parametrize("operator", [Always, Eventually])
-def test_vectorized_temporal_matches_the_step_by_step_loop(
-    operator, interval, beta
-):
+def test_temporal_windows_are_the_window_reductions(operator, interval, beta):
     torch.manual_seed(0)
     lower = torch.rand(2, 12) - 0.3  # smooth lowers can leave [0, 1]
     upper = lower + torch.rand(2, 12)
@@ -609,12 +607,33 @@ def test_vectorized_temporal_matches_the_step_by_step_loop(
 
     operation = Minish() if operator is Always else Maxish()
     new = operator(Supplied(), interval)(None, beta=beta)
-    old = _LoopTemporal(Supplied(), interval, operation)(None, beta=beta)
-    torch.testing.assert_close(new, old, atol=1e-5, rtol=1e-5)
-    # Gradients agree too, so the planner sees the same objective.
+    # Eq. (9) with the sound smooth reductions: one reduction per origin
+    # over its window (to the trace end for [a, inf)).
+    a, b = [0, np.inf] if interval is None else interval
+    steps = trace.shape[1]
+    last = steps - 1 if np.isinf(b) else None
+    origins = steps - (a if np.isinf(b) else b)
+    direct = torch.stack(
+        [
+            _reduce_bounds(
+                operation,
+                trace[:, k + a : (k + b if last is None else last) + 1],
+                beta,
+                keepdim=False,
+            )
+            for k in range(origins)
+        ],
+        dim=1,
+    )
+    torch.testing.assert_close(new, direct, atol=1e-5, rtol=1e-5)
     (new_grad,) = torch.autograd.grad(new.sum(), trace)
-    (old_grad,) = torch.autograd.grad(old.sum(), trace)
-    torch.testing.assert_close(new_grad, old_grad, atol=1e-5, rtol=1e-5)
+    (direct_grad,) = torch.autograd.grad(direct.sum(), trace)
+    torch.testing.assert_close(new_grad, direct_grad, atol=1e-5, rtol=1e-5)
+    # Bounded windows, and every exact window, also equal the step-by-step
+    # register recursion used before (Eq. (12)).
+    if not np.isinf(b) or beta is None:
+        old = _LoopTemporal(Supplied(), interval, operation)(None, beta=beta)
+        torch.testing.assert_close(new, old, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.parametrize("beta", [None, 0.5, 3.0, 40.0])

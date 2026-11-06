@@ -282,11 +282,9 @@ def _checked_interval(interval):
 class Temporal_Operator(STL_Formula):
     """Window reduction (min: Always, max: Eventually); beta > 0 smooths.
 
-    A bounded window [a, b] is reduced in one step at every origin. A window
-    that runs to the trace end, [a, inf), is folded pairwise from the end:
-    each origin combines the next origin's value with the value a steps
-    ahead, starting from the last value (repeated while the a-step delay
-    fills). That fold is one cumulative reduction over the whole trace.
+    At origin k the window is k + a .. k + b, or k + a to the trace end for
+    [a, inf). Every origin's window is reduced at once, exactly (min/max) or
+    with the sound smooth reductions of `_reduce_bounds` over that window.
     """
 
     symbol = None  # subclasses set self.operation to Minish() or Maxish()
@@ -316,47 +314,30 @@ class Temporal_Operator(STL_Formula):
         )
 
     def _tail_trace(self, trace, beta):
-        """[a, inf): fold pairs from the trace end (see the class docstring).
+        """[a, inf): reduce trace[k + a :] at every origin k.
 
-        With beta, a pair reduction adds the two values' exp(+-beta * value)
-        on one endpoint (the shifted one) and averages them on the other, so
-        the fold is a cumulative logsumexp; averaging halves the running sum
-        each step, hence the j * log(2) weights.
+        Suffix reductions are cumulative from the trace end; with beta, each
+        origin's window of n values gets the normalized soft min/max and the
+        log(n)/beta shift, as `_reduce_bounds` gives a fixed window.
         """
         a = int(self._interval[0])
-        steps = trace.shape[1]
-        last = trace[:, -1:]
-        # Order the backward pass meets the values in: a copies of the last
-        # value while the delay fills, then the trace from its end.
-        folded = torch.cat([last.expand(-1, a, -1), trace.flip(1)], dim=1)
-        folded = folded[:, :steps]
+        minimum = isinstance(self.operation, Minish)
+        suffix = trace[:, a:].flip(1)  # from the trace end backwards
         if beta is None:
-            cumulative = (
-                torch.cummin
-                if isinstance(self.operation, Minish)
-                else torch.cummax
-            )
-            result = cumulative(folded, dim=1).values
-        else:
-            sign = -1.0 if isinstance(self.operation, Minish) else 1.0
-            # The endpoint whose pair reduction is a plain sum in exp space:
-            # the lower for a min, the upper for a max.
-            summed = 0 if sign < 0 else 1
-            log_start = sign * beta * last
-            log_values = sign * beta * folded
-            ln2 = math.log(2.0)
-            j = torch.arange(steps, dtype=trace.dtype, device=trace.device)
-            weights = (j * ln2).view(1, -1, 1)
-            averaged = torch.logaddexp(
-                log_start, torch.logcumsumexp(log_values + weights, dim=1)
-            ) - (weights + ln2)
-            added = torch.logaddexp(
-                log_start, torch.logcumsumexp(log_values, dim=1)
-            )
-            ends = [averaged[..., 0], averaged[..., 1]]
-            ends[summed] = added[..., summed]
-            result = _pair(*ends) / (sign * beta)
-        return result[:, a:].flip(1)
+            cumulative = torch.cummin if minimum else torch.cummax
+            return cumulative(suffix, dim=1).values.flip(1)
+        sign = -1.0 if minimum else 1.0
+        log_sums = torch.logcumsumexp(sign * beta * suffix, dim=1).flip(1)
+        count = torch.arange(
+            suffix.shape[1], 0, -1, dtype=trace.dtype, device=trace.device
+        ).view(1, -1, 1)
+        smooth = (log_sums - torch.log(count)) / (sign * beta)
+        shift = torch.log(count[..., 0]) / beta
+        if minimum:
+            # Normalized soft-min overshoots min: pull the lower down.
+            return _pair(smooth[..., 0] - shift, smooth[..., 1])
+        # Normalized soft-max undershoots max: push the upper up.
+        return _pair(smooth[..., 0], smooth[..., 1] + shift)
 
     def robustness_trace(
         self, belief_trajectory, beta=None, keepdim=True, **kwargs
