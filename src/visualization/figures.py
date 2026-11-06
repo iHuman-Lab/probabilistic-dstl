@@ -1432,6 +1432,10 @@ def plot_timing(result, *, save_path=None, show=False):
                 )
             ax.set_xscale("log")
             ax.set_yscale("log")
+            # Tick each measured size, written plainly (31, 61, ... 4096).
+            measured = sorted({x for xs, _ys in series.values() for x in xs})
+            ax.set_xticks(measured, [f"{x:g}" for x in measured])
+            ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
             ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
             ax.set_xlabel(xlabel, fontsize=PAPER_FONT, labelpad=0)
             ax.set_ylabel(ylabel, fontsize=PAPER_FONT, labelpad=1)
@@ -1444,7 +1448,7 @@ def plot_timing(result, *, save_path=None, show=False):
             handles,
             labels,
             loc="outside upper center",
-            ncol=len(labels),
+            ncol=2,
             fontsize=PAPER_FONT - 1,
             frameon=False,
             handlelength=1.8,
