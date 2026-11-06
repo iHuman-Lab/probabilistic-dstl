@@ -1393,7 +1393,7 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     text = lane.latex_table()
     assert text.startswith(r"\begin{tabular}{lccccccc}")
     assert r"Merged/yielded" in text
-    assert r"$\underline{\rho} \geq \alpha$ (\%)" in text
+    assert r"$\widehat{r}^{\varphi,\downarrow}_0 \geq \alpha$ (\%)" in text
     assert (
         "Merge + headway & 4/5 & 3/1 & 3.2 & -- & 0.90 & 98.8 & 120 / 180"
         in text

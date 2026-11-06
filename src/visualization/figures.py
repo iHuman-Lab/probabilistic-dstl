@@ -1173,7 +1173,9 @@ def _score_panel(ax, panels, dt, alpha, events, title):
     ax.set_xlim(0, end)
     ax.set_ylim(0, 1.05)
     ax.set_xlabel("time (s)", fontsize=PAPER_FONT, labelpad=0)
-    ax.set_ylabel("window ρ̲", fontsize=PAPER_FONT, labelpad=1)
+    ax.set_ylabel(
+        r"$\hat{r}^{\varphi,\downarrow}_0$", fontsize=PAPER_FONT, labelpad=1
+    )
     ax.tick_params(labelsize=PAPER_FONT, length=2, pad=1)
     for side in ("right", "top"):
         ax.spines[side].set_visible(False)
@@ -1323,7 +1325,12 @@ def plot_lane_paper(
         score = axes_at(*rects[3])
         letter = chr(ord("a") + len(panels))
         _score_panel(
-            score, panels, dt, alpha, events, f"({letter}) ρ̲ per window"
+            score,
+            panels,
+            dt,
+            alpha,
+            events,
+            f"({letter}) Exact lower score per window",
         )
         axes.append(score)
         handles = {}

@@ -1005,8 +1005,9 @@ def latex_table(scenes=TABLE_SCENES, *, save=True):
         r"\toprule",
         (
             r"Scene & Completed & Merged/yielded & Clearance (m) & "
-            r"Lead gap (m) & Lowest $\underline{\rho}$ & "
-            r"$\underline{\rho} \geq \alpha$ (\%) & Replan med./p95 (ms) \\"
+            r"Lead gap (m) & Lowest $\widehat{r}^{\varphi,\downarrow}_0$ & "
+            r"$\widehat{r}^{\varphi,\downarrow}_0 \geq \alpha$ (\%) & "
+            r"Replan med./p95 (ms) \\"
         ),
         r"\midrule",
     ]
