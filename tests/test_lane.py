@@ -1,5 +1,7 @@
 """Lane change and merge: semantics, planning, and figures."""
 
+from pathlib import Path
+
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import pytest
@@ -20,6 +22,7 @@ from planning.environment import (
     lane_subformulas,
 )
 from planning.planner import IterationRecord
+from planning.runners import save_result
 from utils import load_config
 from visualization.animation import animate_mpc
 from visualization.live_plots import create_live_view
@@ -30,6 +33,18 @@ from visualization.figures import (
     _draw_environment,
     plot_lane_merge,
 )
+
+
+def run_lane(path, *, show=False, save=False, **kwargs):
+    """The main.py flow: config -> build -> simulate -> output."""
+    cfg = load_config(path)
+    stem = Path(path).stem
+    scenario = lane.build(cfg)
+    result = lane.simulate(scenario, **kwargs)
+    if show or save:
+        lane.present(result, scenario, stem=stem, show=show, save=save)
+    save_result(result, stem, save)
+    return result
 
 
 def test_collision_uses_footprints_and_margins():
@@ -221,7 +236,7 @@ def test_lane_save_and_live_observer(
 
     cfg, path = lane_config
     monkeypatch.setattr(runners, "RESULTS_DIR", tmp_path)
-    result = lane.run(str(path), max_steps=1, show=False, save=True)
+    result = run_lane(str(path), max_steps=1, show=False, save=True)
     assert (tmp_path / "lane_change.pt").exists()
     assert (tmp_path / "lane_change.gif").exists()
     for stem in ("lane_change", "lane_change_trajectory"):
@@ -297,7 +312,7 @@ def test_lane_save_and_live_observer(
     assert len(executed.get_xdata()) == 2
     plt.close(fig)
 
-    viewed = lane.run(
+    viewed = run_lane(
         str(path), max_steps=1, show=False, save=False, live=True
     )
     torch.testing.assert_close(
@@ -315,7 +330,7 @@ def test_lane_save_and_live_observer(
 
 def test_default_lane_completes_with_physical_controls():
     cfg = load_config("configs/scenarios/lane/lane_change.yaml")
-    result = lane.run(
+    result = run_lane(
         "configs/scenarios/lane/lane_change.yaml", show=False, save=False
     )
     assert result.stopped_reason == "success"
@@ -369,7 +384,7 @@ def test_deadline_missed_is_reported(lane_config):
     cfg, path = lane_config
     cfg["task"]["start_window_seconds"] = [0.0, 0.2]
     path.write_text(yaml.safe_dump(cfg))
-    result = lane.run(str(path), max_steps=5, show=False, save=False)
+    result = run_lane(str(path), max_steps=5, show=False, save=False)
     assert result.stopped_reason == "deadline_missed"
     assert len(result.window_plans) <= 2
 
@@ -381,7 +396,7 @@ def test_on_ramp_merge_tapers_and_completes():
     road = env.metadata["road"]
     assert ramp["start_x"] < ramp["end_x"]
     assert env.metadata["traffic"][0]["y"] == road["lane_divider"] * 2
-    result = lane.run(
+    result = run_lane(
         "configs/scenarios/lane/lane_merge.yaml", show=False, save=False
     )
     assert result.stopped_reason == "success"
@@ -418,7 +433,7 @@ def test_lane_figures_have_time_labels_red_traffic_and_final_score(
     config["planner"]["max_iters"] = 1
     path = tmp_path / "lane_change.yaml"
     path.write_text(yaml.safe_dump(config))
-    result = lane.run(str(path), max_steps=1, show=False, save=False)
+    result = run_lane(str(path), max_steps=1, show=False, save=False)
     problem = lane.build(config, device="cpu")
     figures = plot_lane_merge(result, problem.env, dt=config["dt"])
     trajectory = figures["trajectory"][1]

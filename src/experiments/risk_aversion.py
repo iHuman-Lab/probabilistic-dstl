@@ -1,4 +1,4 @@
-"""Two-gap reach-avoid: does pdSTL put safety first as uncertainty grows?
+"""Risk aversion: does pdSTL put safety first as uncertainty grows?
 
 A floor block and an upper block leave two gaps to the goal: a narrow slit
 between them (short) and the open room above the upper block (around,
@@ -11,16 +11,13 @@ Uncertainty levels are the robot's 1-sigma position uncertainty after a
 reference time of open-loop driving (config `uncertainty`); `load` turns each
 into the process noise q that produces it.
 
-Steps (CPU):
-
-    PDSTL_DEVICE=cpu PYTHONPATH=src python -m experiments.two_gap run
-    PDSTL_DEVICE=cpu PYTHONPATH=src python -m experiments.two_gap report
-
-`run` writes candidates.csv, selected.csv and plans.pt; `report` reads them
-and writes the table and figure. Outputs go to outputs/two_gap/.
+Driven from main.py, one block per method (STLCG, pdSTL): `with_noise`
+derives the noise levels, `optimize` plans, `validate` runs Monte Carlo,
+`save_outputs` writes <method>_candidates.csv, <method>_selected.csv and
+<method>_plans.pt. A third block loads both with `load_outputs` and passes
+them to `table` and `figure`. Outputs go to outputs/risk_aversion/.
 """
 
-import argparse
 import copy
 import csv
 from itertools import pairwise
@@ -41,10 +38,10 @@ from planning.runners import (
     setup_problem,
 )
 from utils import load_config
-from visualization.figures import COLORS, _ellipse_parameters
+from visualization.risk_aversion import LABELS, plot_risk_aversion
 
-CONFIG = "configs/scenarios/reach_avoid/two_gap.yaml"
-OUTPUTS = RESULTS_DIR / "two_gap"
+CONFIG = "configs/scenarios/reach_avoid/risk_aversion.yaml"
+OUTPUTS = RESULTS_DIR / "risk_aversion"
 
 
 def noise_for_uncertainty(cfg, sigma, time):
@@ -68,12 +65,16 @@ def noise_for_uncertainty(cfg, sigma, time):
 
 
 def load(path=CONFIG):
+    """Config from `path` with its noise levels derived."""
+    return with_noise(load_config(path))
+
+
+def with_noise(cfg):
     """Config with `noise` (q per level) set from `uncertainty`.
 
     Levels are the robot's 1-sigma position uncertainty after a reference
     time of open-loop driving: a property of the robot, not of the map.
     """
-    cfg = load_config(path)
     spec = cfg["uncertainty"]
     cfg["noise"] = {
         level: noise_for_uncertainty(cfg, sigma, spec["after_s"])
@@ -288,43 +289,63 @@ def evaluate(cfg, controls, noise):
     }
 
 
-def run(cfg):
-    """Plan every method at every level, select, evaluate; save CSVs."""
-    candidates, selected, plans = [], [], {}
-    for method, settings in cfg["methods"].items():
-        # STLCG ignores noise: plan once, evaluate at every level.
-        shared = (
-            plan(cfg, method, None) if settings["kind"] == "stlcg" else None
+def optimize(cfg, method):
+    """Plan from every gap at each noise level; keep one plan per level.
+
+    Returns:
+        candidates: every planned row, flagged `selected` for the kept one.
+        picks: {(method, noise): the kept row, with its `controls`}.
+    """
+    candidates, picks = [], {}
+    # STLCG ignores noise: plan once, evaluate at every level.
+    shared = (
+        plan(cfg, method, None)
+        if cfg["methods"][method]["kind"] == "stlcg"
+        else None
+    )
+    for noise in cfg["noise"]:
+        rows = shared if shared is not None else plan(cfg, method, noise)
+        pick = select(cfg, method, rows)
+        for row in rows:
+            candidates.append(
+                {**_public(row), "noise": noise, "selected": row is pick}
+            )
+        picks[(method, noise)] = {
+            **pick,
+            "noise": noise,
+            "time_s": sum(r["time_s"] for r in rows),
+        }
+    return candidates, picks
+
+
+def validate(cfg, picks):
+    """Monte Carlo success, score and clearance of each kept plan.
+
+    Returns:
+        One row per (method, noise): the kept row plus its evaluation.
+    """
+    selected = []
+    for (method, noise), pick in picks.items():
+        result = evaluate(cfg, pick["controls"], noise)
+        selected.append({**_public(pick), **result})
+        print(
+            f"{method:9s} {noise:6s} {pick['gap']:6s} "
+            f"success {100 * result['success']:5.1f}% "
+            f"[{100 * result['ci_low']:.1f}, "
+            f"{100 * result['ci_high']:.1f}] "
+            f"score {result['score_eval']:.3f}",
+            flush=True,
         )
-        for noise in cfg["noise"]:
-            rows = shared if shared is not None else plan(cfg, method, noise)
-            pick = select(cfg, method, rows)
-            for row in rows:
-                candidates.append(
-                    {**_public(row), "noise": noise, "selected": row is pick}
-                )
-            result = evaluate(cfg, pick["controls"], noise)
-            selected.append(
-                {
-                    **_public(pick),
-                    "noise": noise,
-                    "time_s": sum(r["time_s"] for r in rows),
-                    **result,
-                }
-            )
-            plans[f"{method}/{noise}"] = pick["controls"]
-            print(
-                f"{method:9s} {noise:6s} {pick['gap']:6s} "
-                f"success {100 * result['success']:5.1f}% "
-                f"[{100 * result['ci_low']:.1f}, "
-                f"{100 * result['ci_high']:.1f}] "
-                f"score {result['score_eval']:.3f}",
-                flush=True,
-            )
+    return selected
+
+
+def save_outputs(method, candidates, selected, picks):
+    """Write <method>_candidates.csv, _selected.csv and _plans.pt."""
     OUTPUTS.mkdir(parents=True, exist_ok=True)
-    _write(candidates, "candidates.csv")
-    _write(selected, "selected.csv")
-    torch.save(plans, OUTPUTS / "plans.pt")
+    _write(candidates, f"{method}_candidates.csv")
+    _write(selected, f"{method}_selected.csv")
+    plans = {f"{m}/{n}": pick["controls"] for (m, n), pick in picks.items()}
+    torch.save(plans, OUTPUTS / f"{method}_plans.pt")
 
 
 def _public(row):
@@ -344,19 +365,21 @@ def _read(name):
         return list(csv.DictReader(file))
 
 
-# Report: table and figure from the saved results
+def load_outputs(method):
+    """Selected rows and plans of one method, as save_outputs wrote them."""
+    rows = _read(f"{method}_selected.csv")
+    plans = torch.load(OUTPUTS / f"{method}_plans.pt")
+    return rows, plans
 
-LABELS = {"stlcg": "STLCG", "pdstl": "pdSTL"}
-# The repo's figure palette (visualization.figures.COLORS): pdSTL in the
-# belief blue, the deterministic plan in the planned orange.
-METHOD_COLOR = {"pdstl": COLORS["mean"], "stlcg": COLORS["planned"]}
 
+def table(cfg, *saved):
+    """One row per uncertainty level and method; CSV and Markdown.
 
-def table(cfg):
-    """One row per uncertainty level and method; CSV and Markdown."""
+    `saved` holds one `load_outputs` result per method.
+    """
     uncertainty = cfg["uncertainty"]
     rows = []
-    for r in _read("selected.csv"):
+    for r in (row for rows, _ in saved for row in rows):
         rows.append(
             {
                 "noise": r["noise"],
@@ -423,221 +446,15 @@ def first_arrival(cfg, mean):
     return int(hits[0]) if len(hits) else None
 
 
-def _draw_room(ax, cfg):
-    """Walls, obstacles and goal in the repo's style; start marked S."""
-    from matplotlib.patches import Rectangle
-
-    (x0, x1), (y0, y1) = cfg["bounds"]["x_range"], cfg["bounds"]["y_range"]
-    ax.add_patch(
-        Rectangle(
-            (x0, y0),
-            x1 - x0,
-            y1 - y0,
-            fill=False,
-            ec=COLORS["workspace"],
-            lw=1.3,
-        )
-    )
-    for block in cfg["obstacles"]:
-        (bx0, bx1), (by0, by1) = block["x_range"], block["y_range"]
-        ax.add_patch(
-            Rectangle(
-                (bx0, by0),
-                bx1 - bx0,
-                by1 - by0,
-                fc=COLORS["obstacle"],
-                ec=COLORS["obstacle"],
-                alpha=0.45,
-                hatch="//",
-            )
-        )
-    (gx0, gx1), (gy0, gy1) = cfg["goal"]["x_range"], cfg["goal"]["y_range"]
-    ax.add_patch(
-        Rectangle(
-            (gx0, gy0),
-            gx1 - gx0,
-            gy1 - gy0,
-            fc=COLORS["goal"],
-            ec=COLORS["goal"],
-            alpha=0.35,
-        )
-    )
-    ax.text(
-        (gx0 + gx1) / 2,
-        gy1 + 0.15,
-        "G",
-        color=COLORS["goal"],
-        fontweight="bold",
-        ha="center",
-        va="bottom",
-    )
-    sx, sy = cfg["x0_mean"][:2]
-    ax.plot(sx, sy, "o", color="k", ms=3.5, zorder=5)
-    ax.text(sx, sy + 0.25, "S", fontweight="bold", ha="center", va="bottom")
-
-
-def _draw_plan(ax, mean, cov, method, every):
-    """Mean path; pdSTL also gets its 95% belief ellipses every `every`.
-
-    STLCG plans the noise-free mean, so it has no belief to draw; its
-    executed spread shows in its Monte Carlo success instead.
-    """
-    from matplotlib.patches import Ellipse
-
-    color = METHOD_COLOR[method]
-    ax.plot(*mean.T, color=color, lw=1.6, zorder=4)
-    if method != "pdstl":
-        return
-    for k in [*range(every, len(mean) - 1, every), len(mean) - 1]:
-        width, height, angle = _ellipse_parameters(cov[k], 0.95)
-        ax.add_patch(
-            Ellipse(
-                mean[k],
-                width,
-                height,
-                angle=angle,
-                fc=color,
-                ec=color,
-                alpha=0.22,
-                lw=0.6,
-                zorder=3,
-            )
-        )
-
-
-def _ticks(limits, step=2, last=True):
-    """Ticks every `step` metres across `limits`; drop the upper end unless
-    `last`."""
-    lo, hi = limits
-    ticks = np.arange(lo, hi + 1e-9, step)
-    return ticks if last else ticks[ticks < hi]
-
-
-def figure(cfg, methods=("stlcg", "pdstl")):
-    """One panel per noise level: both plans and their MC success.
-
-    Sized for a two-column IEEE figure (7.16 in) with the panels filling
-    the width; the explanation of the marks belongs in the caption.
-    """
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
-
-    plans = torch.load(OUTPUTS / "plans.pt")
-    picked = {(r["method"], r["noise"]): r for r in _read("selected.csv")}
-    levels = list(cfg["noise"])
-    every = cfg["figure"]["ellipse_every"]
-    sigma = cfg["uncertainty"]["position_std_m"]
-    after = cfg["uncertainty"]["after_s"]
-    with plt.rc_context({"font.size": 8}):
-        fig, axes = plt.subplots(
-            1,
-            len(levels),
-            figsize=(7.16, 2.95),
-            sharey=True,
-            gridspec_kw={"wspace": 0.05},
-        )
-        for i, (ax, noise) in enumerate(zip(axes, levels)):
-            _draw_room(ax, cfg)
-            for method in methods:
-                mean, cov = belief(cfg, plans[f"{method}/{noise}"], noise)
-                _draw_plan(ax, mean, cov, method, every)
-            success = "\n".join(
-                f"{LABELS[m]}: "
-                f"{100 * float(picked[(m, noise)]['success']):.1f}%"
-                for m in reversed(methods)
-            )
-            ax.text(
-                0.025,
-                0.975,
-                success,
-                transform=ax.transAxes,
-                va="top",
-                fontsize=7.5,
-                linespacing=1.35,
-                bbox={"fc": "white", "ec": "none", "alpha": 0.8, "pad": 1.5},
-            )
-            ax.set_title(
-                f"({'abc'[i]}) {noise} uncertainty: "
-                f"{100 * sigma[noise]:.0f} cm after {after:g} s",
-                fontsize=8,
-                pad=3,
-            )
-            ax.set(
-                xlim=cfg["bounds"]["x_range"],
-                ylim=cfg["bounds"]["y_range"],
-                aspect="equal",
-                # the last panel alone shows the right wall's tick, so
-                # labels of neighbouring panels do not meet
-                xticks=_ticks(
-                    cfg["bounds"]["x_range"], last=i == len(levels) - 1
-                ),
-                yticks=_ticks(cfg["bounds"]["y_range"]),
-            )
-            ax.set_xlabel("x [m]", labelpad=1)
-            ax.grid(color=COLORS["workspace"], alpha=0.16, lw=0.6)
-            ax.set_axisbelow(True)
-            ax.tick_params(labelsize=7, length=2, pad=1.5)
-        axes[0].set_ylabel("y [m]", labelpad=1)
-        handles = [
-            Line2D([], [], color=METHOD_COLOR["pdstl"], lw=1.6, label="pdSTL"),
-            Patch(
-                fc=METHOD_COLOR["pdstl"],
-                ec=METHOD_COLOR["pdstl"],
-                alpha=0.3,
-                label="pdSTL 95% belief",
-            ),
-            Line2D([], [], color=METHOD_COLOR["stlcg"], lw=1.6, label="STLCG"),
-            Patch(
-                fc=COLORS["obstacle"],
-                ec=COLORS["obstacle"],
-                alpha=0.45,
-                hatch="//",
-                label="Obstacle",
-            ),
-            Patch(
-                fc=COLORS["goal"], ec=COLORS["goal"], alpha=0.35, label="Goal"
-            ),
-        ]
-        fig.legend(
-            handles=handles,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.0),
-            ncol=5,
-            fontsize=7.5,
-            frameon=False,
-            handlelength=2.0,
-            columnspacing=1.4,
-            borderaxespad=0.1,
-        )
-        fig.subplots_adjust(left=0.05, right=0.998, bottom=0.1, top=0.88)
-        for suffix in (".png", ".pdf"):
-            fig.savefig(
-                OUTPUTS / f"figure{suffix}",
-                dpi=300,
-                bbox_inches="tight",
-                pad_inches=0.02,
-            )
-        plt.close(fig)
-    print(f"wrote {OUTPUTS / 'figure.png'}", flush=True)
-
-
-def report(cfg):
-    """Table and figure from the saved results."""
-    table(cfg)
-    figure(cfg)
-
-
-STEPS = {"run": run, "report": report}
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("step", choices=STEPS)
-    parser.add_argument("--config", default=CONFIG)
-    args = parser.parse_args()
-    STEPS[args.step](load(args.config))
-
-
-if __name__ == "__main__":
-    main()
+def figure(cfg, *saved, methods=("stlcg", "pdstl")):
+    """Plot both plans per noise level from the saved results."""
+    plans = {k: v for _, p in saved for k, v in p.items()}
+    picked = {(r["method"], r["noise"]): r for rows, _ in saved for r in rows}
+    beliefs = {
+        (m, n): belief(cfg, plans[f"{m}/{n}"], n)
+        for m in methods
+        for n in cfg["noise"]
+    }
+    success = {k: float(r["success"]) for k, r in picked.items()}
+    path = plot_risk_aversion(cfg, beliefs, success, OUTPUTS, methods)
+    print(f"wrote {path}", flush=True)

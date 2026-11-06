@@ -1,15 +1,15 @@
-# Two-gap reach-avoid: a 10 m room with a floor block and a taller upper
+# Risk aversion: a 10 m room with a floor block and a taller upper
 # block. Two gaps lead to the goal: a narrow 0.3 m slit between the blocks
 # (short) and the open room above the upper block (around, longer). The task
 # is phi = G[0,H] (inside the room and outside both blocks) & F[0,H] goal.
 # Both methods plan "meet the requirement, then spend least effort";
-# src/experiments/two_gap.py compares them at three uncertainty levels.
-name: Two-Gap Reach-Avoid
+# src/experiments/risk_aversion.py compares them at three uncertainty levels.
+name: Risk Aversion
 dynamics: double_integrator
 H: 60
 dt: 0.2
 u_max: 1.0
-q_std: null       # set per level from `uncertainty` (two_gap.load)
+q_std: null       # set per level from `uncertainty` (risk_aversion.load)
 x0_mean: [0.5, 4.0, 0.0, 0.0]
 x0_cov_scale: [1.0e-4, 1.0e-4, 0.0, 0.0]
 bounds: {x_range: [0.0, 10.0], y_range: [0.0, 10.0]}
@@ -20,7 +20,7 @@ goal: {x_range: [8.3, 9.3], y_range: [4.5, 5.5]}
 
 # Uncertainty levels: the robot's 1-sigma position uncertainty after
 # `after_s` seconds of open-loop driving. The process noise q (Q = q^2 I,
-# as in StoRI) for each level is computed from this in two_gap.load.
+# as in StoRI) for each level is computed from this in risk_aversion.load.
 uncertainty:
   after_s: 10.0
   position_std_m: {low: 0.05, medium: 0.20, high: 0.50}
