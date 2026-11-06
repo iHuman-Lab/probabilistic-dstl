@@ -33,8 +33,11 @@ def interval_probability(low, high, mean, variance):
         probability = _cdf((mean - low) / sigma)
     else:
         a, b = (low - mean) / sigma, (high - mean) / sigma
-        probability = torch.where(
-            a > 0, _cdf(-a) - _cdf(-b), _cdf(b) - _cdf(a)
+        # Above the mean use the upper tail, Phi(-a) - Phi(-b); otherwise
+        # Phi(b) - Phi(a). Picking the arguments first costs two CDFs.
+        upper_tail = a > 0
+        probability = _cdf(torch.where(upper_tail, -a, b)) - _cdf(
+            torch.where(upper_tail, -b, a)
         )
 
     deterministic = ((mean >= low) & (mean <= high)).to(mean.dtype)
@@ -145,6 +148,9 @@ class GaussianBeliefTrajectory(BeliefTrajectory):
 
     def __init__(self, mean, covariance):
         self.trace = GaussianBelief(mean, covariance)
+        # Predicate -> [B, T, 2] bounds, filled as formulas score this trace
+        # (the trace is never changed after construction).
+        self.bounds_cache = {}
         covariance = self.trace.covariance
         super().__init__(
             GaussianBelief(mean[:, t], covariance[:, t], validate=False)

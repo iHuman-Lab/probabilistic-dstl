@@ -40,11 +40,15 @@ class BeliefTrajectory:
 
 def check_probability_bounds(trace, predicate=None):
     """Raise (never clamp) on non-finite, unordered, or out-of-[0, 1] bounds."""
+    # One pass when all is well; NaN fails every comparison, so it is caught.
+    lower, upper = trace[..., 0], trace[..., 1]
+    in_range = (trace >= -_ATOL) & (trace <= 1.0 + _ATOL)
+    if bool(in_range.all() & (lower <= upper + _ATOL).all()):
+        return
     who = "predicate"
     if predicate is not None:
         who = getattr(predicate, "name", None) or type(predicate).__name__
 
-    lower, upper = trace[..., 0], trace[..., 1]
     bad = (
         ~torch.isfinite(trace).all(dim=-1)
         | (lower > upper + _ATOL)
