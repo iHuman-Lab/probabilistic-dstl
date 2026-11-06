@@ -6,6 +6,9 @@ from pdstl.base import Belief, BeliefTrajectory
 from pdstl.predicates import AxisInterval, HalfSpace, RelativeAxisInterval
 
 INF = float("inf")
+# Covariances checked per eigenvalue call: cuSOLVER on an RTX 3090 (torch
+# 2.10) accepts 16384 4x4 matrices per call and rejects 32768.
+EIGEN_CHUNK = 16384
 
 
 def _cdf(z):
@@ -80,8 +83,11 @@ def _validate(mean, covariance):
     # Tolerances, not equality: A P A^T accumulates round-off.
     if not torch.allclose(covariance, covariance.transpose(-1, -2), atol=1e-5):
         raise ValueError("covariance must be symmetric")
-    if bool((torch.linalg.eigvalsh(covariance) < -1e-6).any()):
-        raise ValueError("covariance must be positive semi-definite")
+    # cuSOLVER rejects very large batches of matrices, so check in chunks.
+    matrices = covariance.reshape(-1, *covariance.shape[-2:])
+    for chunk in matrices.split(EIGEN_CHUNK):
+        if bool((torch.linalg.eigvalsh(chunk) < -1e-6).any()):
+            raise ValueError("covariance must be positive semi-definite")
 
 
 class GaussianBelief(Belief):
