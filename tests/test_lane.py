@@ -1,5 +1,6 @@
 """Lane change and merge: semantics, planning, and figures."""
 
+import os
 from functools import reduce
 from types import SimpleNamespace
 
@@ -1300,6 +1301,10 @@ def test_batch_runs_each_seed_and_saves_one_table(
     assert machine["H"] == cfg["H"]
     assert machine["max_iters"] == cfg["planner"]["max_iters"]
     assert (machine["gpu"] is None) == (machine["device"] == "cpu")
+    # What the timings ran on: threads and the CPUs the process was allowed.
+    assert machine["threads"] == torch.get_num_threads()
+    assert machine["allowed cpus"] == sorted(os.sched_getaffinity(0))
+    assert machine["cpu"]
     saved = (tmp_path / "lane_change_batch.json").read_text()
     assert '"table"' in saved and '"trials"' in saved
 

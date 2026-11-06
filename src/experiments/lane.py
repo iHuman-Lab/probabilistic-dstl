@@ -6,6 +6,7 @@ configs/scenarios/lane/.
 
 import json
 import logging
+import os
 import platform
 from collections import Counter
 from pathlib import Path
@@ -848,6 +849,18 @@ def _seeded(config_path, seed):
     return build(cfg)
 
 
+def _cpu_model():
+    """The CPU model name from /proc/cpuinfo, else the platform's name."""
+    try:
+        with open("/proc/cpuinfo") as info:
+            for line in info:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine()
+
+
 def _machine(s):
     """Hardware and planner settings the batch timings depend on.
 
@@ -855,12 +868,15 @@ def _machine(s):
         s: A built lane problem.
 
     Returns:
-        Dict with CPU, device, GPU name (None off CUDA), torch version,
-        horizon H and the planner's max_iters.
+        Dict with CPU model, torch threads, the CPUs the process may run on,
+        device, GPU name (None off CUDA), torch version, horizon H and the
+        planner's max_iters.
     """
     device = torch.device(s.dyn.device)
     return {
-        "cpu": platform.processor() or platform.machine(),
+        "cpu": _cpu_model(),
+        "threads": torch.get_num_threads(),
+        "allowed cpus": sorted(os.sched_getaffinity(0)),
         "device": str(device),
         "gpu": (
             torch.cuda.get_device_name(device)
