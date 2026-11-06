@@ -7,7 +7,6 @@ configs/scenarios/lane/.
 import json
 import logging
 import os
-import platform
 from collections import Counter
 from pathlib import Path
 from time import perf_counter
@@ -35,7 +34,7 @@ from planning.environment import (
     lane_yield_reached,
 )
 from planning.runners import output_path, save_result, setup_problem
-from utils import load_config
+from utils import cpu_model, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -849,18 +848,6 @@ def _seeded(config_path, seed):
     return build(cfg)
 
 
-def _cpu_model():
-    """The CPU model name from /proc/cpuinfo, else the platform's name."""
-    try:
-        with open("/proc/cpuinfo") as info:
-            for line in info:
-                if line.startswith("model name"):
-                    return line.split(":", 1)[1].strip()
-    except OSError:
-        pass
-    return platform.processor() or platform.machine()
-
-
 def _machine(s):
     """Hardware and planner settings the batch timings depend on.
 
@@ -874,7 +861,7 @@ def _machine(s):
     """
     device = torch.device(s.dyn.device)
     return {
-        "cpu": _cpu_model(),
+        "cpu": cpu_model(),
         "threads": torch.get_num_threads(),
         "allowed cpus": sorted(os.sched_getaffinity(0)),
         "device": str(device),

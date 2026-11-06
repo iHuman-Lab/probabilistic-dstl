@@ -3,7 +3,7 @@
 Figures are shown, then saved to outputs/ when closed.
 """
 
-from experiments import lane, reach_avoid
+from experiments import lane, reach_avoid, timing
 from utils import skip_run
 
 REACH_AVOID = "configs/scenarios/reach_avoid"
@@ -72,3 +72,11 @@ with skip_run("skip", "LaneBatch") as check, check():
 with skip_run("skip", "LanePaper") as check, check():
     lane.paper_figure()
     lane.latex_table()
+
+
+# 11. Evaluation cost: the formula evaluated for all origins at once vs the
+#     recurrent register, smooth forward + backward, against trace length and
+#     batch size, on CPU and GPU (outputs/timing_benchmark.json, .pdf). For
+#     the paper's CPU numbers run pinned: taskset -c 10 with OMP_NUM_THREADS=1.
+with skip_run("skip", "TimingBenchmark") as check, check():
+    timing.benchmark()

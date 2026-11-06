@@ -1358,3 +1358,112 @@ def plot_lane_paper(
             plt.show(block=True)
         plt.close(fig)
     return fig, axes
+
+
+# --- Timing benchmark ---------------------------------------------------------
+
+TIMING_COLORS = {"parallel": "tab:blue", "recurrent": "tab:orange"}
+TIMING_LINES = {"cpu": ("-", "o"), "cuda": ("--", "s")}
+TIMING_DEVICE_NAMES = {"cpu": "CPU", "cuda": "GPU"}
+
+
+def _timing_series(rows, experiment, x_key, y_key):
+    """{(method, device): (xs, ys)} for one experiment, sorted by x."""
+    series = {}
+    for row in rows:
+        if row["experiment"] != experiment:
+            continue
+        key = (row["method"], row["device"].split(":")[0])
+        series.setdefault(key, []).append((row[x_key], row[y_key]))
+    return {key: tuple(zip(*sorted(points))) for key, points in series.items()}
+
+
+def plot_timing(result, *, save_path=None, show=False):
+    """One-column figure of the evaluation benchmark.
+
+    (a) milliseconds per smooth forward and backward pass against trace
+    length at batch 1; (b) candidate plans scored per second against batch
+    size. Colour: parallel (blue) or recurrent (orange); line: CPU (solid)
+    or GPU (dashed).
+
+    Args:
+        result: Output of `experiments.timing.benchmark`.
+        save_path: Output path; a PDF and a 300 dpi PNG are written.
+        show: Display the figure.
+
+    Returns:
+        (figure, (axes_a, axes_b)).
+    """
+    style = {
+        "mathtext.fontset": "dejavusans",
+        "font.family": "DejaVu Sans",
+        "pdf.fonttype": 42,
+    }
+    panels = (
+        ("A", "steps", "ms", "(a) Time per iteration", "trace length T", "ms"),
+        (
+            "B",
+            "batch",
+            "plans per s",
+            f"(b) Throughput, T = {_batch_steps(result)}",
+            "candidate plans per call",
+            "plans / s",
+        ),
+    )
+    with plt.rc_context(style):
+        fig, axes = plt.subplots(
+            1, 2, figsize=(COLUMN_WIDTH, 1.75), constrained_layout=True
+        )
+        for ax, (experiment, x_key, y_key, title, xlabel, ylabel) in zip(
+            axes, panels
+        ):
+            series = _timing_series(result["rows"], experiment, x_key, y_key)
+            for (method, device), (xs, ys) in series.items():
+                line, marker = TIMING_LINES[device]
+                ax.plot(
+                    xs,
+                    ys,
+                    ls=line,
+                    marker=marker,
+                    ms=2.5,
+                    lw=1.0,
+                    color=TIMING_COLORS[method],
+                    label=f"{method}, {TIMING_DEVICE_NAMES[device]}",
+                )
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
+            ax.set_xlabel(xlabel, fontsize=PAPER_FONT, labelpad=0)
+            ax.set_ylabel(ylabel, fontsize=PAPER_FONT, labelpad=1)
+            ax.tick_params(labelsize=PAPER_FONT - 1, length=2, pad=1)
+            ax.grid(alpha=0.25, lw=0.4, which="major")
+            for side in ("right", "top"):
+                ax.spines[side].set_visible(False)
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(
+            handles,
+            labels,
+            loc="outside upper center",
+            ncol=len(labels),
+            fontsize=PAPER_FONT - 1,
+            frameon=False,
+            handlelength=1.8,
+            columnspacing=0.8,
+        )
+        if save_path is not None:
+            stem = Path(save_path).with_suffix("")
+            stem.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(stem.with_suffix(".pdf"))
+            fig.savefig(stem.with_suffix(".png"), dpi=300)
+        if show and matplotlib.get_backend().lower() != "agg":
+            plt.show(block=True)
+        plt.close(fig)
+    return fig, tuple(axes)
+
+
+def _batch_steps(result):
+    """Trace length of the batch experiment."""
+    steps = {
+        row["steps"] for row in result["rows"] if row["experiment"] == "B"
+    }
+    return steps.pop() if len(steps) == 1 else "varies"
