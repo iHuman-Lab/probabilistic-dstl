@@ -8,7 +8,7 @@ from math import ceil, floor, hypot, isclose, isfinite
 
 import numpy as np
 
-from pdstl.operators import Always, And, Eventually, Or, Until
+from pdstl.operators import END, Always, And, Eventually, Or, Until
 from pdstl.predicates import (
     AxisInterval,
     GreaterThan,
@@ -499,9 +499,11 @@ def _lane_merge_task(metadata, horizon, target, settled):
 
     Before any dwell credit the branch is
     F[start, latest] (G[0,d] lane AND G[d,d] before_end
-                      AND G[d,inf) (lane AND settled)).
+                      AND G[d,end] (lane AND settled)).
     Once in the lane it is
-    lane U[remaining, latest] (before_end AND G[0,inf) (lane AND settled)).
+    lane U[remaining, latest] (before_end AND G[0,end] (lane AND settled)).
+    "end" is the plan end: the stay window runs from the dwell finish to the
+    horizon, so its length depends on the start the F (or U) picks.
 
     Args:
         metadata: Lane metadata of the local window (step, streak, task).
@@ -544,7 +546,7 @@ def _lane_merge_task(metadata, horizon, target, settled):
     if not credit:
         # Not in the lane yet: one Eventually over the dwell start s, with
         # the same conjunction grouping as one candidate per s, so the exact
-        # lower bound is the same max over starts. G[d, inf) runs to the
+        # lower bound is the same max over starts. G[d, END] runs to the
         # trace end, which is the horizon end.
         start = max(0, absolute_start - step)
         latest_start = absolute_end - dwell - step
@@ -552,7 +554,7 @@ def _lane_merge_task(metadata, horizon, target, settled):
             raise ValueError("lane task has no remaining feasible dwell start")
         starts = [start, latest_start]
         completion, _finish = completion_from_start(0, dwell)
-        stay = Always(target & settled, [dwell, np.inf])
+        stay = Always(target & settled, [dwell, END])
         return {
             "complete": Eventually(completion, starts),
             "stay": Eventually(stay, starts),
@@ -567,7 +569,7 @@ def _lane_merge_task(metadata, horizon, target, settled):
     # of an Or over f. The Frechet And lower is max(0, sum - (n - 1)) for any
     # grouping, so the lower bound equals the Or over finishes.
     finishes = [remaining, min(absolute_end - step, horizon)]
-    stay = Always(target & settled, [0, np.inf])
+    stay = Always(target & settled, [0, END])
     ramp = metadata.get("ramp")
     if ramp is None:
         return {

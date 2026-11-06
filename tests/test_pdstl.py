@@ -9,6 +9,7 @@ from models.beliefs import GaussianBelief, ProbabilityBelief
 from models.rollouts import create_probability_belief_trajectory
 from pdstl.base import BeliefTrajectory
 from pdstl.operators import (
+    END,
     Always,
     And,
     Eventually,
@@ -682,6 +683,19 @@ def test_vectorized_until_matches_the_step_by_step_loop(interval, beta):
     (new_grad,) = torch.autograd.grad(new.sum(), phi)
     (old_grad,) = torch.autograd.grad(old.sum(), phi)
     torch.testing.assert_close(new_grad, old_grad, atol=1e-5, rtol=1e-5)
+
+
+def test_end_window_is_the_rest_of_the_trace_and_prints_as_end():
+    values = [0.9, 0.2, 0.7, 0.4, 0.6]
+    traj = scalar(values)
+    spec = Always(Predicate("p"), [1, END])
+    got = spec(traj)[0, :, 0].tolist()
+    # At origin k the window is k + 1 .. last step: finite, length 4 - k.
+    np.testing.assert_allclose(
+        got, [min(values[k + 1 :]) for k in range(len(values) - 1)]
+    )
+    assert str(spec) == "□_[1, end](p)"
+    assert "U_[0, end]" in str(Until(Predicate("p"), Predicate("q"), [0, END]))
 
 
 def test_smooth_temporal_output_is_differentiable():
