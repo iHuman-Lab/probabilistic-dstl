@@ -120,6 +120,59 @@ return _reduce_bounds(self.max_op, candidates, beta, dim=2, keepdim=False)
 - Benchmark: the two versions agree to 1.2e-7 on every configuration.
 - Propositions 1–2, Eqs. (8)–(10) and (15)–(16) are unchanged.
 
+## Worked example: Always, recurrent vs parallel
+
+$\mathbf G_{[1,2]}$ (a = 1, b = 2) on a 6-step trace, lower endpoint. The
+register contents below are printed from the recurrent code.
+
+| k | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| $L_k$ | 0.90 | 0.60 | 0.80 | 0.70 | 0.95 | 0.85 |
+
+At origin k the answer is the min of $L_{k+1}, L_{k+2}$, for k = 0 … T−1−b = 0 … 3.
+
+**Recurrent.** The trace is fed backwards, $z_s = L_{5-s}$. The register has
+b + 1 = 3 rows and starts filled with $z_0$. Each step shifts the rows up and
+writes $z_s$ into the last row; the output is the min of rows 0 … b−a.
+
+| s | origin k | $z_s$ | register (rows 0, 1, 2) | min of rows 0–1 | kept? |
+|---|---|---|---|---|---|
+| start | | | 0.85, 0.85, 0.85 | | |
+| 0 | 5 | 0.85 | 0.85, 0.85, 0.85 | 0.85 | dropped |
+| 1 | 4 | 0.95 | 0.85, 0.85, 0.95 | 0.85 | dropped |
+| 2 | 3 | 0.70 | 0.85, 0.95, 0.70 | **0.85** | kept |
+| 3 | 2 | 0.80 | 0.95, 0.70, 0.80 | **0.70** | kept |
+| 4 | 1 | 0.60 | 0.70, 0.80, 0.60 | **0.70** | kept |
+| 5 | 0 | 0.90 | 0.80, 0.60, 0.90 | **0.60** | kept |
+
+The first b outputs are dropped because the register still holds copies of
+the starting value. From s = 2 every row is a real sample, and at origin k
+rows 0 and 1 are $x_{k+2}$ and $x_{k+1}$: the window.
+
+**Parallel.** Read each window straight from the trace (all at once, one
+`unfold`) and reduce it once.
+
+| k | window | exact (min) | smooth, β = 10: $-\tfrac1\beta\log\sum_j e^{-\beta x_j}$ |
+|---|---|---|---|
+| 0 | 0.60, 0.80 | **0.60** | $-\tfrac1{10}\log(e^{-6.0}+e^{-8.0})$ = **0.5873** |
+| 1 | 0.80, 0.70 | **0.70** | $-\tfrac1{10}\log(e^{-8.0}+e^{-7.0})$ = **0.6687** |
+| 2 | 0.70, 0.95 | **0.70** | $-\tfrac1{10}\log(e^{-7.0}+e^{-9.5})$ = **0.6921** |
+| 3 | 0.95, 0.85 | **0.85** | $-\tfrac1{10}\log(e^{-9.5}+e^{-8.5})$ = **0.8187** |
+
+The recurrent version reduces the same two register rows with the same
+function, so its kept outputs are identical: exact (0.60, 0.70, 0.70, 0.85),
+smooth (0.5873, 0.6687, 0.6921, 0.8187). The smooth lower is below the exact
+min by at most δ₂ = ln 2 / β = 0.069 (Eq. (16)).
+
+**Why they agree.** At origin k the register holds $x_{k+b}, \dots, x_{k+a}$
+in rows 0 … b−a, and the parallel window holds the same values. Min and
+log-sum-exp do not depend on the order of their inputs, so both versions give
+the same value up to float rounding (largest difference in the benchmark
+1.2e-7). This holds for bounded windows and for Until. For windows to the
+end of the plan the exact values also agree; the smooth values differ on
+purpose, because the old recurrent fold counted the last value more than
+once and was not Eq. (15).
+
 ## Results
 
 **Benchmark** (one smooth forward + backward pass, φ₁-shaped formula, batch 1;
