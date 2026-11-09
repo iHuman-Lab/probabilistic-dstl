@@ -327,3 +327,24 @@ def test_sampled_trajectories_match_the_predicted_belief():
     torch.testing.assert_close(
         torch.cov(paths[:, -1].T), covariance[0, -1], atol=5e-3, rtol=0
     )
+
+
+def test_covariance_check_runs_in_chunks_and_still_finds_a_bad_matrix(
+    monkeypatch,
+):
+    from models import beliefs
+
+    monkeypatch.setattr(beliefs, "EIGEN_CHUNK", 4)
+    mean = torch.zeros(3, 5, 2)
+    covariance = torch.eye(2).expand(3, 5, 2, 2).clone()
+    GaussianBelief(mean, covariance)  # 15 matrices, 4 chunks: all fine
+    covariance[2, 4] = torch.tensor([[1.0, 2.0], [2.0, 1.0]])  # eigenvalue -1
+    with pytest.raises(ValueError, match="positive semi-definite"):
+        GaussianBelief(mean, covariance)  # the bad one is in the last chunk
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_large_covariance_batch_is_checked_on_cuda():
+    mean = torch.zeros(4096, 31, 4, device="cuda")
+    covariance = torch.eye(4, device="cuda").expand(4096, 31, 4, 4).clone()
+    GaussianBelief(mean, covariance)

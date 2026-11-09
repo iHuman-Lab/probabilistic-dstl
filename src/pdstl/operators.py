@@ -117,6 +117,11 @@ class Predicate(STL_Formula):
         return True
 
     def robustness_trace(self, belief_trajectory, validate=True, **kwargs):
+        # A trajectory with a bounds cache scores each atom once: the bounds
+        # do not depend on beta, so a smooth and an exact pass share them.
+        cache = getattr(belief_trajectory, "bounds_cache", None)
+        if cache is not None and self in cache:
+            return cache[self]
         # A trajectory that can score every step at once does so; otherwise, step by step.
         score_all = getattr(belief_trajectory, "probability_bounds", None)
         if score_all is not None:
@@ -127,6 +132,8 @@ class Predicate(STL_Formula):
             )
         if validate:
             check_probability_bounds(trace, self)
+        if cache is not None:
+            cache[self] = trace
         return trace
 
     def __str__(self):
@@ -253,15 +260,26 @@ class Implies(STL_Formula):
 
 # --- Temporal operators ---------------------------------------------------------
 
+# Window end meaning the last step of the trace (the plan end). Traces are
+# finite, so G[a, END] at origin k is the finite window k + a .. N; only its
+# length depends on k.
+END = np.inf
+
+
+def _window_text(interval):
+    """[a, b] as text, with END written as "end"."""
+    a, b = interval
+    return f"[{a}, {'end' if b == END else b}]"
+
 
 def _checked_interval(interval):
-    """A temporal window [a, b]: whole numbers with 0 <= a <= b. b may be infinite."""
+    """A temporal window [a, b]: whole numbers with 0 <= a <= b, or b = END."""
     if interval is None:
         return None
     a, b = interval
-    if b != np.inf and (not np.isfinite(b) or b != int(b)):
+    if b != END and (not np.isfinite(b) or b != int(b)):
         raise ValueError(
-            f"interval end must be a whole number or inf, got {list(interval)}"
+            f"interval end must be a whole number or END, got {list(interval)}"
         )
     if not np.isfinite(a) or a != int(a) or a < 0:
         raise ValueError(
@@ -269,11 +287,16 @@ def _checked_interval(interval):
         )
     if a > b:
         raise ValueError(f"interval must satisfy a <= b, got {list(interval)}")
-    return [int(a), np.inf if b == np.inf else int(b)]
+    return [int(a), END if b == END else int(b)]
 
 
 class Temporal_Operator(STL_Formula):
-    """Window reduction (min: Always, max: Eventually) run backwards; beta > 0 smooths."""
+    """Window reduction (min: Always, max: Eventually); beta > 0 smooths.
+
+    At origin k the window is k + a .. k + b, or k + a .. N (the trace end)
+    for [a, END]. Every origin's window is reduced at once, exactly (min/max)
+    or with the sound smooth reductions of `_reduce_bounds` over that window.
+    """
 
     symbol = None  # subclasses set self.operation to Minish() or Maxish()
 
@@ -281,87 +304,49 @@ class Temporal_Operator(STL_Formula):
         super().__init__()
         self.subformula = subformula
         self.interval = _checked_interval(interval)
-        self._interval = (
-            [0, np.inf] if self.interval is None else self.interval
-        )
-
-        a, b = self._interval
-        self._unbounded = np.isinf(b)
-        # [0, inf) is the same window as no interval: the rest of the trace.
-        self._suffix = interval is None or (self._unbounded and int(a) == 0)
-
-        if self._suffix:
-            self.rnn_dim = 1
-        elif self._unbounded:
-            self.rnn_dim = int(a)
-        else:
-            self.rnn_dim = int(b) + 1
-
-        # Shift register: M drops the oldest slot, b writes the newest one.
-        self.register_buffer(
-            "M", torch.tensor(np.diag(np.ones(self.rnn_dim - 1), k=1)).float()
-        )
-        b_vec = torch.zeros(self.rnn_dim, 1)
-        b_vec[-1] = 1.0
-        self.register_buffer("b", b_vec)
+        self._interval = [0, END] if self.interval is None else self.interval
+        self._to_end = self._interval[1] == END
 
     @property
     def lookahead(self):
-        """Future steps one evaluation needs (0 for a suffix window)."""
+        """Future steps one evaluation needs (a for [a, END], else b)."""
         a, b = self._interval
-        if self._suffix:
-            return 0
-        return int(a) if self._unbounded else int(b)
+        return int(a) if self._to_end else int(b)
 
-    def _initialize_rnn_cell(self, x):
-        """Register pre-filled with the first reversed value; those outputs are dropped."""
-        h0 = (
-            x[:, :1, :].expand(-1, self.rnn_dim, -1).clone()
-        )  # [B, rnn_dim, 2]
-        if self._unbounded and not self._suffix:  # [a, inf), a > 0
-            return ((x[:, :1, :], h0), 0.0)
-        return (h0, 0.0)
-
-    def _apply_shift(self, h0, x):
-        """M @ h0 + b * x, applied to each interval endpoint."""
-        batch, rnn_dim, bounds = h0.shape
-        M = self.M.to(dtype=h0.dtype, device=h0.device)
-        b = self.b.to(dtype=h0.dtype, device=h0.device)
-        h0_flat = h0.permute(0, 2, 1).reshape(-1, rnn_dim)  # [B*2, rnn_dim]
-        shifted = (
-            torch.matmul(h0_flat, M.t())
-            .reshape(batch, bounds, rnn_dim)
-            .permute(0, 2, 1)
+    def _window_trace(self, trace, beta):
+        """[a, b]: reduce trace[t + a : t + b + 1] at every origin t."""
+        a, b = int(self._interval[0]), int(self._interval[1])
+        # [B, origins, 2, n] -> [B, origins, n, 2]
+        windows = trace[:, a:].unfold(1, b - a + 1, 1).transpose(-1, -2)
+        return _reduce_bounds(
+            self.operation, windows, beta, dim=2, keepdim=False
         )
-        return shifted + b.view(1, -1, 1) * x.squeeze(1).unsqueeze(1)
 
-    def _rnn_cell(self, x, hc, beta=None):
-        h0, _ = hc
-        if self._suffix:  # [t, end of trace]
-            output = _reduce_bounds(
-                self.operation, torch.cat([h0, x], dim=1), beta
-            )
-            state = (output, None)
-        elif self._unbounded:  # [a, inf), a > 0
-            d0, h0 = h0
-            dh = torch.cat([d0, h0[:, :1, :]], dim=1)
-            output = _reduce_bounds(self.operation, dh, beta)
-            state = ((output, self._apply_shift(h0, x)), None)
-        else:  # [a, b]: slot rnn_dim-1-k holds the value k steps ahead
-            a, b = int(self._interval[0]), int(self._interval[1])
-            new_h0 = self._apply_shift(h0, x)
-            output = _reduce_bounds(
-                self.operation, new_h0[:, : b - a + 1, :], beta
-            )
-            state = (new_h0, None)
-        return output, state
+    def _tail_trace(self, trace, beta):
+        """[a, END]: reduce trace[k + a :] at every origin k.
 
-    def _run_cell(self, x, beta):
-        outputs, hc = [], self._initialize_rnn_cell(x)
-        for x_i in torch.split(x, 1, dim=1):
-            o, hc = self._rnn_cell(x_i, hc, beta)
-            outputs.append(o)
-        return torch.cat(outputs, dim=1)
+        Suffix reductions are cumulative from the trace end; with beta, each
+        origin's window of n values gets the normalized soft min/max and the
+        log(n)/beta shift, as `_reduce_bounds` gives a fixed window.
+        """
+        a = int(self._interval[0])
+        minimum = isinstance(self.operation, Minish)
+        suffix = trace[:, a:].flip(1)  # from the trace end backwards
+        if beta is None:
+            cumulative = torch.cummin if minimum else torch.cummax
+            return cumulative(suffix, dim=1).values.flip(1)
+        sign = -1.0 if minimum else 1.0
+        log_sums = torch.logcumsumexp(sign * beta * suffix, dim=1).flip(1)
+        count = torch.arange(
+            suffix.shape[1], 0, -1, dtype=trace.dtype, device=trace.device
+        ).view(1, -1, 1)
+        smooth = (log_sums - torch.log(count)) / (sign * beta)
+        shift = torch.log(count[..., 0]) / beta
+        if minimum:
+            # Normalized soft-min overshoots min: pull the lower down.
+            return _pair(smooth[..., 0] - shift, smooth[..., 1])
+        # Normalized soft-max undershoots max: push the upper up.
+        return _pair(smooth[..., 0], smooth[..., 1] + shift)
 
     def robustness_trace(
         self, belief_trajectory, beta=None, keepdim=True, **kwargs
@@ -374,16 +359,16 @@ class Temporal_Operator(STL_Formula):
                 f"{self}: one evaluation origin needs {self.lookahead + 1} steps, "
                 f"child trace has {trace.shape[1]}"
             )
-        # Run backwards so each origin sees its future; drop incomplete windows.
-        output_reversed = self._run_cell(
-            torch.flip(trace, dims=[1]), beta=beta
-        )
-        return torch.flip(output_reversed[:, self.lookahead :], dims=[1])
+        if self._to_end:
+            return self._tail_trace(trace, beta)
+        return self._window_trace(trace, beta)
 
     def __str__(self):
         if self.interval is None:
             return f"{self.symbol}({self.subformula})"
-        return f"{self.symbol}_{self._interval}({self.subformula})"
+        return (
+            f"{self.symbol}_{_window_text(self._interval)}({self.subformula})"
+        )
 
 
 class Always(Temporal_Operator):
@@ -414,7 +399,7 @@ class Until(STL_Formula):
         self.left = left
         self.right = right
         checked = _checked_interval(interval)
-        self.interval = [0, np.inf] if checked is None else checked
+        self.interval = [0, END] if checked is None else checked
         self._interval = self.interval
         self.min_op = Minish()
         self.max_op = Maxish()
@@ -422,7 +407,7 @@ class Until(STL_Formula):
     @property
     def lookahead(self):
         a, b = self._interval
-        return int(a) if np.isinf(b) else int(b)
+        return int(a) if b == END else int(b)
 
     def robustness_trace(
         self, belief_trajectory, beta=None, keepdim=True, **kwargs
@@ -433,7 +418,7 @@ class Until(STL_Formula):
 
         T = phi.shape[1]
         a = int(self._interval[0])
-        b = T - 1 if np.isinf(self._interval[1]) else int(self._interval[1])
+        b = T - 1 if self._interval[1] == END else int(self._interval[1])
         n_valid = T - self.lookahead
         if n_valid <= 0:
             raise ValueError(
@@ -441,6 +426,8 @@ class Until(STL_Formula):
                 f"child traces have {T}"
             )
 
+        if self._interval[1] != END:
+            return self._window_trace(phi, psi, n_valid, a, b, beta)
         results = []
         for t in range(n_valid):
             candidates = []
@@ -460,5 +447,39 @@ class Until(STL_Formula):
             )
         return torch.stack(results, dim=1)
 
+    def _window_trace(self, phi, psi, n_valid, a, b, beta):
+        """Bounded [a, b] at every origin at once (the loop's values).
+
+        Each origin's window phi[t : t + b + 1] gives every prefix min
+        phi[t .. tau] as one cumulative reduction; the prefixes ending at
+        tau = t + a .. t + b meet psi(tau), and the best one is kept.
+        """
+
+        def windows(trace):  # [B, n_valid, b + 1, 2]
+            return (
+                trace[:, : n_valid + b].unfold(1, b + 1, 1).transpose(-1, -2)
+            )
+
+        phi_windows, psi_windows = windows(phi), windows(psi)
+        if beta is None:
+            prefix = torch.cummin(phi_windows, dim=2).values
+        else:
+            # Prefix of length n: lower -logsumexp(-beta x) / beta (sound
+            # shift included), upper the normalized soft-min.
+            log_sums = torch.logcumsumexp(-beta * phi_windows, dim=2)
+            length = torch.arange(
+                1, b + 2, dtype=phi.dtype, device=phi.device
+            ).view(1, 1, -1)
+            prefix = _pair(
+                -log_sums[..., 0] / beta,
+                -(log_sums[..., 1] - torch.log(length)) / beta,
+            )
+        candidates = _conjunction(
+            prefix[:, :, a:], psi_windows[:, :, a:], beta
+        )
+        return _reduce_bounds(
+            self.max_op, candidates, beta, dim=2, keepdim=False
+        )
+
     def __str__(self):
-        return f"({self.left}) U_{self._interval} ({self.right})"
+        return f"({self.left}) U_{_window_text(self._interval)} ({self.right})"

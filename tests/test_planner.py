@@ -328,6 +328,7 @@ def test_mpc_first_control_execution_local_spec_and_warm_start(steps):
     assert result.stopped_reason == "max_steps"
     assert [k for _, k in specifications] == list(range(steps))
     for k, plan in enumerate(result.window_plans):
+        assert plan.replanning_time >= plan.planning_time > 0
         torch.testing.assert_close(
             result.applied_controls[k], plan.controls[0]
         )
@@ -539,3 +540,14 @@ def test_alpha_status_states_whether_the_lower_robustness_meets_alpha():
     planner, rollout, spec = problem(max_iters=1)
     result = planner.optimize_window(rollout, spec=spec)
     assert result.alpha_status() == "no α requested"
+
+
+def test_smooth_tie_break_keeps_the_least_bad_of_equal_exact_scores():
+    def record(hard, smooth):
+        return SimpleNamespace(hard_interval=(hard, 1.0), smooth_lower=smooth)
+
+    candidates = [(0, record(0.0, -0.2)), (1, record(0.0, -3.0))]
+    assert Planner._select_candidate(candidates)[0] == 1
+    assert Planner._select_candidate(candidates, "smooth")[0] == 0
+    better = [(0, record(0.0, -0.2)), (1, record(0.4, -3.0))]
+    assert Planner._select_candidate(better, "smooth")[0] == 1

@@ -7,6 +7,8 @@ margin_target: 0.0
 margin_beta: 10.0  # STLCG log-sum-exp smoothing; null: hard STL robustness
 lr: 0.05
 max_iters: 300
+warm_tail: repeat  # next window's last guess: repeat the last control, or zero
+tie_break: latest  # equal exact scores: latest iterate, or highest smooth score
 smoothing:
   beta_start: 10.0
   beta_end: 200.0

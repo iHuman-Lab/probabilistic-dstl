@@ -31,6 +31,7 @@ class PlanResult:
     initial_hard_lower: float | None = None
     initial_smooth_lower: float | None = None
     monte_carlo: tuple[float, float, float] | None = None
+    replanning_time: float = 0.0
 
     def alpha_status(self):
         """Whether the lower robustness meets alpha, in words."""
@@ -59,6 +60,7 @@ class MPCResult:
     window_plans: list[PlanResult]
     stopped_reason: str
     failure_detail: str | None = None
+    failed_replanning_time: float | None = None
 
 
 class Planner:
@@ -78,7 +80,7 @@ class Planner:
         if unknown:
             raise ValueError(f"unknown planner settings: {sorted(unknown)}")
         self.dyn, self.horizon = dynamics, horizon
-        self.device = dynamics.device
+        self.device = torch.device(dynamics.device)
         self.cfg = {**defaults, **config}
         self.cfg["smoothing"] = {
             **defaults["smoothing"],
@@ -91,6 +93,10 @@ class Planner:
         beta = self.cfg["margin_beta"]
         if beta is not None and (not math.isfinite(beta) or beta <= 0):
             raise ValueError("margin_beta must be finite and positive or null")
+        if self.cfg["warm_tail"] not in ("repeat", "zero"):
+            raise ValueError("warm_tail must be 'repeat' or 'zero'")
+        if self.cfg["tie_break"] not in ("latest", "smooth"):
+            raise ValueError("tie_break must be 'latest' or 'smooth'")
 
     @property
     def control_dim(self):
@@ -307,7 +313,9 @@ class Planner:
                     "rollout must supply finite gradients to controls"
                 )
             optimizer.step()
-        result_iteration, selected = self._select_candidate(candidates)
+        result_iteration, selected = self._select_candidate(
+            candidates, self.cfg["tie_break"]
+        )
         result = self.evaluate_controls(
             rollout,
             selected.controls,
@@ -323,14 +331,30 @@ class Planner:
         return result
 
     @staticmethod
-    def _select_candidate(candidates):
-        """Highest exact lower bound; the later iterate wins a tie."""
+    def _select_candidate(candidates, tie_break="latest"):
+        """Highest exact lower bound; ties go to the later iterate.
+
+        With tie_break="smooth", equal exact bounds are first separated by
+        the smooth score, so when every iterate scores 0 the least-bad one
+        is kept instead of whichever came last.
+        """
+        if tie_break == "smooth":
+            return max(
+                reversed(candidates),
+                key=lambda c: (c[1].hard_interval[0], c[1].smooth_lower),
+            )
         return max(reversed(candidates), key=lambda c: c[1].hard_interval[0])
 
     @staticmethod
-    def shift_controls(controls):
-        """Drop the executed control and repeat the last one."""
-        return torch.cat((controls[1:], controls[-1:])).detach().clone()
+    def shift_controls(controls, tail="repeat"):
+        """Drop the executed control; repeat the last one or append a zero.
+
+        A zero tail stops a leftover acceleration from being held to the end
+        of the next window (with acceleration controls it holds the speed).
+        """
+        last = controls[-1:]
+        end = torch.zeros_like(last) if tail == "zero" else last
+        return torch.cat((controls[1:], end)).detach().clone()
 
     def run_receding_horizon(
         self,
@@ -355,11 +379,15 @@ class Planner:
         """
         states, applied, plans = [state], [], []
         failure_detail = None
+        failed_replanning_time = None
         guess = init_guess
         reason = is_done(state, 0)
         for step in range(max_steps):
             if reason:
                 break
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            replanning_started = perf_counter()
             try:
                 plan = self.optimize_window(
                     make_rollout(state, step),
@@ -377,18 +405,22 @@ class Planner:
                     ),
                     callback_every=callback_every,
                 )
+                if self.device.type == "cuda":
+                    torch.cuda.synchronize(self.device)
+                plan.replanning_time = perf_counter() - replanning_started
             except (RuntimeError, ValueError) as error:
                 if not capture_planning_failures:
                     raise
                 reason = "planning_failure"
                 failure_detail = f"{type(error).__name__}: {error}"
+                failed_replanning_time = perf_counter() - replanning_started
                 break
             control = plan.controls[0].clone()
             state = execute(state, control, step)
             states.append(state)
             applied.append(control)
             plans.append(plan)
-            guess = self.shift_controls(plan.controls)
+            guess = self.shift_controls(plan.controls, self.cfg["warm_tail"])
             reason = is_done(state, step + 1)
             if on_step is not None:
                 on_step(step, state, plan)
@@ -407,4 +439,5 @@ class Planner:
             if reason
             else "max_steps",
             failure_detail,
+            failed_replanning_time,
         )

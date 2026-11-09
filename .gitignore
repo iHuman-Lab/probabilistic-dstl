@@ -117,3 +117,6 @@ data/*
 # Generated figures, animations and results from src/main.py
 outputs/
 report/*
+
+# Local experiment data (Crazyflie pipeline)
+experiments/

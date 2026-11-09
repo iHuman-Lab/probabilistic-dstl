@@ -6,6 +6,9 @@ from pdstl.base import Belief, BeliefTrajectory
 from pdstl.predicates import AxisInterval, HalfSpace, RelativeAxisInterval
 
 INF = float("inf")
+# Covariances checked per eigenvalue call: cuSOLVER on an RTX 3090 (torch
+# 2.10) accepts 16384 4x4 matrices per call and rejects 32768.
+EIGEN_CHUNK = 16384
 
 
 def _cdf(z):
@@ -33,8 +36,11 @@ def interval_probability(low, high, mean, variance):
         probability = _cdf((mean - low) / sigma)
     else:
         a, b = (low - mean) / sigma, (high - mean) / sigma
-        probability = torch.where(
-            a > 0, _cdf(-a) - _cdf(-b), _cdf(b) - _cdf(a)
+        # Above the mean use the upper tail, Phi(-a) - Phi(-b); otherwise
+        # Phi(b) - Phi(a). Picking the arguments first costs two CDFs.
+        upper_tail = a > 0
+        probability = _cdf(torch.where(upper_tail, -a, b)) - _cdf(
+            torch.where(upper_tail, -b, a)
         )
 
     deterministic = ((mean >= low) & (mean <= high)).to(mean.dtype)
@@ -77,8 +83,11 @@ def _validate(mean, covariance):
     # Tolerances, not equality: A P A^T accumulates round-off.
     if not torch.allclose(covariance, covariance.transpose(-1, -2), atol=1e-5):
         raise ValueError("covariance must be symmetric")
-    if bool((torch.linalg.eigvalsh(covariance) < -1e-6).any()):
-        raise ValueError("covariance must be positive semi-definite")
+    # cuSOLVER rejects very large batches of matrices, so check in chunks.
+    matrices = covariance.reshape(-1, *covariance.shape[-2:])
+    for chunk in matrices.split(EIGEN_CHUNK):
+        if bool((torch.linalg.eigvalsh(chunk) < -1e-6).any()):
+            raise ValueError("covariance must be positive semi-definite")
 
 
 class GaussianBelief(Belief):
@@ -145,6 +154,9 @@ class GaussianBeliefTrajectory(BeliefTrajectory):
 
     def __init__(self, mean, covariance):
         self.trace = GaussianBelief(mean, covariance)
+        # Predicate -> [B, T, 2] bounds, filled as formulas score this trace
+        # (the trace is never changed after construction).
+        self.bounds_cache = {}
         covariance = self.trace.covariance
         super().__init__(
             GaussianBelief(mean[:, t], covariance[:, t], validate=False)

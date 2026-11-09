@@ -9,6 +9,7 @@ from models.beliefs import GaussianBelief, ProbabilityBelief
 from models.rollouts import create_probability_belief_trajectory
 from pdstl.base import BeliefTrajectory
 from pdstl.operators import (
+    END,
     Always,
     And,
     Eventually,
@@ -19,7 +20,11 @@ from pdstl.operators import (
     Or,
     Predicate,
     Until,
+    _conjunction,
+    _pair,
+    _reduce_bounds,
 )
+from pdstl.recurrent import RecurrentTemporal
 from pdstl.predicates import (
     AxisInterval,
     GreaterThan,
@@ -582,6 +587,116 @@ def test_always_and_eventually_match_direct_window_reductions(interval):
             for t in range(n)
         ],
     )
+
+
+@pytest.mark.parametrize("beta", [None, 0.5, 3.0, 40.0])
+@pytest.mark.parametrize(
+    "interval",
+    [None, [0, np.inf], [3, np.inf], [0, 0], [0, 4], [2, 7], [5, 5]],
+)
+@pytest.mark.parametrize("operator", [Always, Eventually])
+def test_temporal_windows_are_the_window_reductions(operator, interval, beta):
+    torch.manual_seed(0)
+    lower = torch.rand(2, 12) - 0.3  # smooth lowers can leave [0, 1]
+    upper = lower + torch.rand(2, 12)
+    trace = _pair(lower, upper).requires_grad_(True)
+
+    class Supplied(Predicate):
+        def robustness_trace(self, belief_trajectory, **kwargs):
+            return trace
+
+    operation = Minish() if operator is Always else Maxish()
+    new = operator(Supplied(), interval)(None, beta=beta)
+    # Eq. (9) with the sound smooth reductions: one reduction per origin
+    # over its window (to the trace end for [a, inf)).
+    a, b = [0, np.inf] if interval is None else interval
+    steps = trace.shape[1]
+    last = steps - 1 if np.isinf(b) else None
+    origins = steps - (a if np.isinf(b) else b)
+    direct = torch.stack(
+        [
+            _reduce_bounds(
+                operation,
+                trace[:, k + a : (k + b if last is None else last) + 1],
+                beta,
+                keepdim=False,
+            )
+            for k in range(origins)
+        ],
+        dim=1,
+    )
+    torch.testing.assert_close(new, direct, atol=1e-5, rtol=1e-5)
+    (new_grad,) = torch.autograd.grad(new.sum(), trace)
+    (direct_grad,) = torch.autograd.grad(direct.sum(), trace)
+    torch.testing.assert_close(new_grad, direct_grad, atol=1e-5, rtol=1e-5)
+    # Bounded windows, and every exact window, also equal the step-by-step
+    # register recursion used before (Eq. (12)).
+    if not np.isinf(b) or beta is None:
+        old = RecurrentTemporal(Supplied(), interval, operation)(
+            None, beta=beta
+        )
+        torch.testing.assert_close(new, old, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("beta", [None, 0.5, 3.0, 40.0])
+@pytest.mark.parametrize("interval", [[0, 0], [0, 4], [2, 7], [5, 5]])
+def test_vectorized_until_matches_the_step_by_step_loop(interval, beta):
+    torch.manual_seed(1)
+
+    def supplied_trace():
+        lower = torch.rand(2, 12) - 0.3
+        return _pair(lower, lower + torch.rand(2, 12)).requires_grad_(True)
+
+    phi, psi = supplied_trace(), supplied_trace()
+
+    class Supplied(Predicate):
+        def __init__(self, trace):
+            super().__init__()
+            self.trace = trace
+
+        def robustness_trace(self, belief_trajectory, **kwargs):
+            return self.trace
+
+    until = Until(Supplied(phi), Supplied(psi), interval)
+    new = until(None, beta=beta)
+    # The per-origin loop Until used before (it still runs for [a, inf)).
+    a, b = interval
+    n_valid = phi.shape[1] - b
+    old = []
+    for t in range(n_valid):
+        candidates = [
+            _conjunction(
+                _reduce_bounds(
+                    Minish(), phi[:, t : tau + 1], beta, keepdim=False
+                ),
+                psi[:, tau],
+                beta,
+            )
+            for tau in range(t + a, t + b + 1)
+        ]
+        old.append(
+            _reduce_bounds(
+                Maxish(), torch.stack(candidates, dim=1), beta, keepdim=False
+            )
+        )
+    old = torch.stack(old, dim=1)
+    torch.testing.assert_close(new, old, atol=1e-5, rtol=1e-5)
+    (new_grad,) = torch.autograd.grad(new.sum(), phi)
+    (old_grad,) = torch.autograd.grad(old.sum(), phi)
+    torch.testing.assert_close(new_grad, old_grad, atol=1e-5, rtol=1e-5)
+
+
+def test_end_window_is_the_rest_of_the_trace_and_prints_as_end():
+    values = [0.9, 0.2, 0.7, 0.4, 0.6]
+    traj = scalar(values)
+    spec = Always(Predicate("p"), [1, END])
+    got = spec(traj)[0, :, 0].tolist()
+    # At origin k the window is k + 1 .. last step: finite, length 4 - k.
+    np.testing.assert_allclose(
+        got, [min(values[k + 1 :]) for k in range(len(values) - 1)]
+    )
+    assert str(spec) == "□_[1, end](p)"
+    assert "U_[0, end]" in str(Until(Predicate("p"), Predicate("q"), [0, END]))
 
 
 def test_smooth_temporal_output_is_differentiable():
