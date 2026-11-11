@@ -22,6 +22,7 @@ gradients.
 | `src/planning/planner.py` | the optimization: one window, or receding horizon |
 | `src/planning/runners.py` | shared glue: set up, `solve`, `monte_carlo`, save |
 | `src/experiments/reach_avoid.py`, `lane.py` | one file per experiment: `build(cfg)` and `run(config_path)` |
+| `src/experiments/risk_aversion.py` | the paper's 2D comparison: pdSTL vs STLCG at three uncertainty levels |
 | `src/visualization/` | `figures`, `animation`, `live_plots` |
 | `configs/scenarios/<experiment>/*.yaml` | the numbers for each case |
 | `src/main.py` | runs the experiments; flip `"run"`/`"skip"` per block |
@@ -41,10 +42,21 @@ reports whether the selected plan meets the required satisfaction level. The
 initial guess's exact and smooth ρ̲_φ are recorded (`initial_hard_lower`,
 `initial_smooth_lower`), so each run prints what the optimization improved.
 
+Two settings turn this into "meet a requirement, then spend least effort":
+
+- `score_threshold: α` replaces the score term with
+  `w_φ · max(0, α − smooth ρ̲_φ)`, and the planner keeps the cheapest iterate
+  whose exact ρ̲_φ reaches α (else the highest ρ̲_φ).
+- `select_by` chooses the returned iterate: `pdstl` (the default, as above),
+  `margin` (the cheapest iterate whose hard mean robustness reaches
+  `margin_target`; the STLCG baseline, needs `w_margin > 0`), or `last` (the
+  final iterate, no in-loop exact scoring).
+
 Optional deterministic guidance adds
 `w_margin * max(0, margin_target - rho_aux)` to that objective, where
 `rho_aux` is STLCG-style robustness of the same formula on the belief mean,
-smoothed with log-sum-exp at `margin_beta` (default 10; `null` is hard
+smoothed with log-sum-exp at `margin_beta` (default 10; `schedule` follows
+pdSTL's β schedule from `beta_start` to `beta_end`; `null` is hard
 robustness). It is off by default (`w_margin: 0`); add `w_margin: 10` to a
 scenario's `planner:` settings to enable it. It matters from poor initial
 guesses (e.g. zero controls), where the exact lower bound is 0 and its
@@ -112,6 +124,49 @@ by **Monte Carlo**: it samples noisy trajectories under the plan's controls and
 scores each with the same spec (with zero variance every atom is 0 or 1, so the
 operators reduce to Boolean logic). It prints ρ̲_φ next to the empirical P(φ)
 with a 95% interval, and the figure shows both.
+
+## Risk aversion (paper example)
+
+`configs/scenarios/reach_avoid/risk_aversion.yaml`: a 10 m room with a floor block
+and an upper block. Two gaps lead to the goal: a 0.3 m slit between the blocks
+(short) and the open room above the upper block (around, longer). The task is
+G[0,H](inside the room ∧ outside both blocks) ∧ F[0,H] goal, with a double
+integrator driven open loop.
+
+Uncertainty levels are the robot's 1σ position spread after 10 s of open-loop
+driving (5, 20 and 50 cm); `risk_aversion.load` turns each into the process noise q
+(Q = q²I) that produces it. Two methods plan "meet the requirement, then spend
+least effort", each from both gaps, and keep one plan by its own rule:
+
+| Method | Requirement | Selection |
+|---|---|---|
+| STLCG | hard mean robustness ≥ 5 cm (noise-free plan) | `select_by: margin` |
+| pdSTL | exact ρ̲_φ ≥ 0.99 at that uncertainty level | `score_threshold: 0.99` |
+
+Both start from the same rest-to-rest guess through each gap and use the same
+β schedule, step size and iterations. Each selected plan is then executed
+under noise, 5000 Monte Carlo runs with the same draws for every plan.
+
+Run it from `src/main.py`: blocks 6 and 7 (`RiskAversionSTLCG`, `RiskAversionPdSTL`) each plan,
+run Monte Carlo and save one method; block 8 (`RiskAversionReport`) writes the table
+and figure from the saved plans, so re-plotting does not re-plan. Set
+`PDSTL_DEVICE=cpu` to force the CPU.
+
+Results go to `outputs/risk_aversion/` (`table.md`, `figure.pdf`, `plans.pt`, …).
+On CPU the run is deterministic.
+
+Results (5000 runs per cell, 95% Clopper–Pearson interval):
+
+| Uncertainty | STLCG gap | STLCG success | pdSTL gap | pdSTL success | pdSTL ρ̲_φ |
+|---|---|---|---|---|---|
+| low (5 cm) | slit | 97.0% [96.5, 97.5] | slit | 100.0% [99.9, 100.0] | 1.000 |
+| medium (20 cm) | slit | 60.5% [59.2, 61.9] | around | 99.9% [99.8, 100.0] | 0.998 |
+| high (50 cm) | slit | 31.6% [30.3, 32.9] | around | 95.7% [95.1, 96.2] | 0.785 |
+
+STLCG plans once, noise-free, so the same plan is evaluated at every level.
+At high uncertainty no plan reaches ρ̲_φ = 0.99 within the horizon, so pdSTL
+returns its best plan (0.785). ρ̲_φ is a robustness, not a probability (see
+*Scope* below); success is the Monte Carlo rate.
 
 ## Lane change and merge
 
@@ -201,7 +256,8 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-Set each block in `src/main.py` to `"run"` or `"skip"`. Figures are shown,
+Set each block in `src/main.py` to `"run"` or `"skip"`. Each block reads
+config → scenario → result (`load_config`, `build`, `run`). Figures are shown,
 then saved to `outputs/` (git-ignored) when closed: PNG, PDF, a GIF, and a
 `.pt` result (`torch.load(path, weights_only=False)`).
 

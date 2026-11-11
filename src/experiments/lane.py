@@ -5,7 +5,6 @@ configs/scenarios/lane/.
 """
 
 import logging
-from pathlib import Path
 from typing import NamedTuple
 
 import torch
@@ -21,8 +20,7 @@ from planning.environment import (
     lane_local_window,
     lane_target_contains,
 )
-from planning.runners import output_path, save_result, setup_problem
-from utils import load_config
+from planning.runners import output_path, setup_problem
 
 logger = logging.getLogger(__name__)
 
@@ -79,22 +77,19 @@ def build(cfg, device=None):
     return s
 
 
-def run(
-    config_path,
+def simulate(
+    s,
     *,
-    show=True,
-    save=True,
     live=False,
     live_optimization=False,
     optimization_every=20,
     verbose=False,
     max_steps=None,
 ):
-    """Execute one lane scenario closed loop, then plot and save it.
+    """Execute one lane scenario closed loop (receding-horizon planning).
 
     Args:
-        config_path: Lane YAML; outputs are named after its file stem.
-        show, save: Display and/or save the figures and animation.
+        s: The problem from `build`.
         live, live_optimization, optimization_every: Live execution view.
         verbose: Log progress.
         max_steps: Override the configured number of executed steps.
@@ -102,7 +97,6 @@ def run(
     Returns:
         The MPCResult.
     """
-    s = build(load_config(config_path))
     generator = _generator(s)
     initial_state = initial_state_of(s, generator=generator)
     label = "Lane merge" if s.env.metadata.get("ramp") else "Lane change"
@@ -134,10 +128,6 @@ def run(
         f"[rho_lower, rho_upper] = [{lower:.4f}, {upper:.4f}]",
         flush=True,
     )
-    stem = Path(config_path).stem
-    if show or save:
-        _present(result, s, stem=stem, show=show, save=save)
-    save_result(result, stem, save)
     return result
 
 
@@ -287,7 +277,8 @@ def _observers(s, *, label, live, optimization_every, initial_state):
     return on_step, observer.on_iteration, optimization_every
 
 
-def _present(result, s, *, stem, show, save):
+def present(result, s, *, stem, show=True, save=True):
+    """Figures and animation of the run; saved under `stem` if `save`."""
     from visualization.animation import animate_mpc
     from visualization.figures import plot_lane_merge
 

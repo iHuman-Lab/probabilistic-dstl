@@ -3,8 +3,6 @@
 The regions and settings come from a YAML in configs/scenarios/reach_avoid/.
 """
 
-from pathlib import Path
-
 import torch
 
 from models.dynamics import SingleIntegrator
@@ -16,11 +14,9 @@ from planning.runners import (
     control_unit,
     monte_carlo,
     output_path,
-    save_result,
     setup_problem,
     solve,
 )
-from utils import load_config
 
 
 def build(cfg, device=None):
@@ -39,29 +35,18 @@ def build(cfg, device=None):
     return s
 
 
-def run(
-    config_path,
-    *,
-    show=True,
-    save=True,
-    live=False,
-    optimization_every=5,
-    verbose=False,
-):
-    """Plan one reach-avoid scenario, validate it, then plot and save it.
+def optimize(s, *, live=False, optimization_every=5, verbose=False):
+    """Plan one open-loop control sequence for a built scenario.
 
     Args:
-        config_path: Scenario YAML; outputs are named after its file stem.
-        show, save: Display and/or save the figure and animation.
+        s: The problem from `build`.
         live, optimization_every: Stream sampled iterates to a live view.
         verbose: Log optimizer progress.
 
     Returns:
-        The PlanResult, with `monte_carlo` = (rate, lower, upper).
+        The PlanResult with the highest exact lower robustness.
     """
-    s = build(load_config(config_path))
-    stem = Path(config_path).stem
-    title = s.cfg.get("name", stem)
+    title = _title(s)
     visual = s.cfg.get("visualization", {})
     on_iteration, finish_live = (
         _live_view(s, title, visual) if live else (None, None)
@@ -75,18 +60,28 @@ def run(
     )
     if finish_live is not None:
         finish_live(result)
-    validation = s.cfg.get("monte_carlo", {})
-    result.monte_carlo = monte_carlo(s, result, **validation)
+    return result
+
+
+def validate(s, result):
+    """Monte Carlo P(phi) of the plan under noise; stored on the result.
+
+    Returns:
+        (rate, lower, upper) with a 95% Clopper-Pearson interval.
+    """
+    settings = s.cfg.get("monte_carlo", {})
+    result.monte_carlo = monte_carlo(s, result, **settings)
     rate, lower, upper = result.monte_carlo
     print(
-        f"{title}: Monte Carlo P(phi) = {rate:.3f} [{lower:.3f}, {upper:.3f}]"
-        f", N = {validation.get('samples', 5000)}",
+        f"{_title(s)}: Monte Carlo P(phi) = {rate:.3f} "
+        f"[{lower:.3f}, {upper:.3f}], N = {settings.get('samples', 5000)}",
         flush=True,
     )
-    if show or save:
-        _present(result, s, stem=stem, title=title, show=show, save=save)
-    save_result(result, stem, save)
-    return result
+    return result.monte_carlo
+
+
+def _title(s):
+    return s.cfg.get("name", "Reach–Avoid")
 
 
 def straight_line_guess(cfg, dyn, waypoints, kp=4.0, kd=4.0):
@@ -147,7 +142,9 @@ def _live_view(s, title, visual):
     return on_iteration, finish
 
 
-def _present(result, s, *, stem, title, show, save):
+def present(result, s, *, stem, show=True, save=True):
+    """Figure and animation of the plan; saved under `stem` if `save`."""
+    title = _title(s)
     from visualization.animation import animate_reach_avoid
     from visualization.figures import plot_reach_avoid
 

@@ -1,6 +1,7 @@
 """Optimizer contracts and the receding-horizon loop."""
 
 import logging
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -539,3 +540,135 @@ def test_alpha_status_states_whether_the_lower_robustness_meets_alpha():
     planner, rollout, spec = problem(max_iters=1)
     result = planner.optimize_window(rollout, spec=spec)
     assert result.alpha_status() == "no α requested"
+
+
+def test_select_last_returns_the_final_iterate_without_exact_scoring():
+    planner, rollout, spec = problem(
+        max_iters=5, select_by="last", w_phi=0.0, w_margin=1.0
+    )
+    calls = []
+    exact = spec.probability_interval
+    spec.probability_interval = lambda *a, **k: (
+        calls.append(1) or exact(*a, **k)
+    )
+    records = []
+    result = planner.optimize_window(
+        rollout, spec=spec, on_iteration=lambda _, r: records.append(r)
+    )
+    assert len(calls) == 2  # only the initial and the returned plan
+    assert result.selected_iteration == 4
+    torch.testing.assert_close(result.controls, records[-1].controls)
+    assert all(r.hard_interval is None for r in records)
+    assert result.hard_lower_history == []
+    elapsed = [r.elapsed for r in records]
+    assert elapsed == sorted(elapsed)
+    assert 0 < elapsed[-1] <= result.planning_time
+
+
+def test_select_by_must_be_known():
+    with pytest.raises(ValueError, match="select_by"):
+        problem(select_by="best")
+
+
+def test_score_threshold_penalizes_only_a_shortfall():
+    controls = torch.tensor([[0.1], [0.3], [0.2], [-0.2], [0.0]])
+    planner, _, _ = problem(w_phi=3.0, score_threshold=0.9)
+    effort = planner._control_cost(controls)
+    torch.testing.assert_close(
+        planner._objective(controls, torch.tensor(0.7)),
+        3 * 0.2 + effort,
+    )
+    for at_or_above in (0.9, 0.95):
+        torch.testing.assert_close(
+            planner._objective(controls, torch.tensor(at_or_above)), effort
+        )
+
+
+def test_score_threshold_must_be_a_probability():
+    for bad in (0.0, 1.5):
+        with pytest.raises(ValueError, match="score_threshold"):
+            problem(score_threshold=bad)
+
+
+def test_threshold_selection_takes_least_effort_among_iterates_meeting_it():
+    planner, _, _ = problem(score_threshold=0.9)
+
+    def candidate(lower, cost):
+        return SimpleNamespace(hard_interval=(lower, 1.0), control_cost=cost)
+
+    candidates = [
+        (-1, candidate(0.60, 0.1)),
+        (0, candidate(0.99, 2.0)),
+        (1, candidate(0.91, 1.0)),
+        (2, candidate(0.95, 1.5)),
+    ]
+    iteration, _ = planner._select_candidate(candidates, 0.9)
+    assert iteration == 1
+    # None meets it: the highest exact bound, as without a threshold.
+    iteration, _ = planner._select_candidate(candidates, 0.995)
+    assert iteration == 0
+
+
+def test_select_by_margin_needs_the_margin_hinge():
+    with pytest.raises(ValueError, match="w_margin"):
+        problem(select_by="margin", w_margin=0.0)
+
+
+def test_margin_beta_accepts_schedule_and_rejects_other_strings():
+    problem(w_margin=1.0, margin_beta="schedule")
+    with pytest.raises(ValueError, match="margin_beta"):
+        problem(w_margin=1.0, margin_beta="anneal")
+
+
+def test_margin_selection_takes_least_effort_among_iterates_meeting_it():
+    def candidate(margin, cost):
+        return SimpleNamespace(margin=margin, control_cost=cost)
+
+    candidates = [
+        (-1, candidate(0.01, 0.1)),
+        (0, candidate(0.30, 2.0)),
+        (1, candidate(0.06, 1.0)),
+        (2, candidate(0.10, 1.5)),
+    ]
+    iteration, _ = Planner._select_by_margin(candidates, 0.05)
+    assert iteration == 1
+    # None meets it: the highest hard mean robustness.
+    iteration, _ = Planner._select_by_margin(candidates, 0.5)
+    assert iteration == 0
+
+
+def test_select_by_margin_records_the_hard_mean_robustness():
+    planner, rollout, spec = problem(
+        max_iters=5,
+        select_by="margin",
+        w_phi=0.0,
+        w_margin=1.0,
+        margin_target=0.05,
+    )
+    records = []
+    result = planner.optimize_window(
+        rollout, spec=spec, on_iteration=lambda _, r: records.append(r)
+    )
+    assert all(r.hard_interval is None for r in records)
+    assert not any(math.isnan(r.margin) for r in records)
+    chosen = records[result.selected_iteration]
+    torch.testing.assert_close(result.controls, chosen.controls)
+    met = [r for r in records if r.margin >= 0.05]
+    if met:
+        assert chosen.margin >= 0.05
+        assert chosen.control_cost == min(r.control_cost for r in met)
+
+
+def test_scheduled_margin_smoothing_uses_the_iterate_beta():
+    planner, rollout, spec = problem(
+        w_phi=0.0, w_margin=1.0, margin_target=1.0, margin_beta="schedule"
+    )
+    auxiliary = planner._auxiliary(spec)
+    prediction = rollout(torch.zeros(5, 1))
+    soft = planner._margin_penalty(prediction, auxiliary, beta=1.0)
+    sharp = planner._margin_penalty(prediction, auxiliary, beta=1000.0)
+    hard = torch.relu(
+        1.0 - auxiliary.robustness(prediction.belief_trajectory, beta=None)
+    ).mean()
+    assert not torch.isclose(soft, sharp)
+    torch.testing.assert_close(sharp, hard, atol=1e-2, rtol=0)
