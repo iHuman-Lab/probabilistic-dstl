@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import yaml
 from PIL import Image
 
-from experiments import reach_avoid
+from tests.test_reach_avoid import run_reach_avoid
 from utils import load_config, skip_run
 from visualization.figures import _finish
 
@@ -38,7 +38,7 @@ def test_reach_avoid_saves_figure_animation_and_result(
     cfg["monte_carlo"] = {"samples": 200}
     path = tmp_path / "obstacle.yaml"
     path.write_text(yaml.safe_dump(cfg))
-    reach_avoid.run(
+    run_reach_avoid(
         str(path), show=False, save=True, live=True, optimization_every=1
     )
     for suffix in (".pt", ".png", ".pdf", ".gif"):

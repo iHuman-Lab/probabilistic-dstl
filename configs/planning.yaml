@@ -4,11 +4,13 @@ w_u: 1.0e-3
 w_du: 1.0e-3
 w_margin: 0.0  # mean-robustness STL hinge; 10.0 enables it, zero preserves pdSTL-only planning
 margin_target: 0.0
-margin_beta: 10.0  # STLCG log-sum-exp smoothing; null: hard STL robustness
+margin_beta: 10.0  # STLCG log-sum-exp smoothing; schedule: pdSTL's beta schedule; null: hard
 lr: 0.05
 max_iters: 300
 warm_tail: repeat  # next window's last guess: repeat the last control, or zero
 tie_break: latest  # equal exact scores: latest iterate, or highest smooth score
+select_by: pdstl  # pdstl: best exact iterate; margin: cheapest iterate with hard mean robustness >= margin_target; last: final iterate
+score_threshold: null  # alpha: penalize w_phi * max(0, alpha - smooth) instead of maximizing
 smoothing:
   beta_start: 10.0
   beta_end: 200.0

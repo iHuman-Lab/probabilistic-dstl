@@ -1,6 +1,8 @@
 """The generic reach-avoid scenario and its two stlpy examples."""
 
+import math
 from functools import reduce
+from pathlib import Path
 from types import SimpleNamespace
 
 import matplotlib
@@ -23,7 +25,7 @@ from planning.environment import (
     shortest_route,
 )
 from planning.planner import IterationRecord
-from planning.runners import monte_carlo
+from planning.runners import monte_carlo, save_result
 from visualization.animation import animate_reach_avoid
 from visualization.live_plots import create_reach_avoid_live_view
 from utils import load_config
@@ -52,6 +54,19 @@ CONFIG = {
         }
     ],
 }
+
+
+def run_reach_avoid(path, *, show=False, save=False, **plan):
+    """The main.py flow: config -> build -> optimize -> validate -> output."""
+    cfg = load_config(path)
+    stem = Path(path).stem
+    scenario = reach_avoid.build(cfg)
+    result = reach_avoid.optimize(scenario, **plan)
+    reach_avoid.validate(scenario, result)
+    if show or save:
+        reach_avoid.present(result, scenario, stem=stem, show=show, save=save)
+    save_result(result, stem, save)
+    return result
 
 
 def _problem(name, **planner):
@@ -381,6 +396,20 @@ def test_live_view_and_animation(short):
     score_line = axes[1].lines[0]
     assert score_line.get_label() == f"{RHO_LOWER} (lower bound)"
     assert len(score_line.get_xdata()) == 1
+    # An iterate planned with `select_by: margin` or `last` has no exact
+    # score; the live view must still draw it.
+    observe(
+        1,
+        IterationRecord(
+            result.controls,
+            result.final_loss,
+            float("nan"),
+            None,
+            result.smoothing_beta,
+        ),
+    )
+    assert len(score_line.get_xdata()) == 2
+    assert math.isnan(score_line.get_ydata()[-1])
     finish(result)
     assert len(score_line.get_xdata()) == len(result.hard_lower_history)
     plt.close(fig)
@@ -433,14 +462,14 @@ def _meets_alpha_and_clear(name, result):
 
 @pytest.mark.slow
 def test_obstacle_case_meets_alpha_around_its_obstacle():
-    result = reach_avoid.run(SCENARIOS["obstacle"], show=False, save=False)
+    result = run_reach_avoid(SCENARIOS["obstacle"], show=False, save=False)
     problem, points = _meets_alpha_and_clear("obstacle", result)
     assert _inside(points, problem.env.region("goal")).any()
 
 
 @pytest.mark.slow
 def test_narrow_passage_meets_alpha_past_four_obstacles_to_a_goal():
-    result = reach_avoid.run(
+    result = run_reach_avoid(
         SCENARIOS["narrow_passage"], show=False, save=False
     )
     problem, points = _meets_alpha_and_clear("narrow_passage", result)
@@ -450,7 +479,7 @@ def test_narrow_passage_meets_alpha_past_four_obstacles_to_a_goal():
 
 @pytest.mark.slow
 def test_either_or_dwells_in_one_target_then_reaches_the_goal():
-    result = reach_avoid.run(SCENARIOS["either_or"], show=False, save=False)
+    result = run_reach_avoid(SCENARIOS["either_or"], show=False, save=False)
     problem, points = _meets_alpha_and_clear("either_or", result)
 
     def longest_stay(region):

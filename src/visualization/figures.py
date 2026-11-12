@@ -39,8 +39,6 @@ def _chi2_radius(confidence):
     return sqrt(-2 * log(1 - confidence))
 
 
-CHI95_RADIUS = _chi2_radius(0.95)
-
 # pdSTL lower and upper stochastic robustness of the spec φ. They are a
 # robustness interval, not bounds on the probability that φ holds.
 # mathtext has no \underline; \underset draws the lower-bound bar.
@@ -925,11 +923,32 @@ def _draw_road(ax, env):
         )
 
 
+def _heading(state):
+    """Direction of travel (rad) from the velocity; 0 when nearly stopped."""
+    vx, vy = state[2], state[3]
+    return 0.0 if vx < 0.5 else float(np.arctan2(vy, vx))
+
+
 def _draw_car(
-    ax, center, size, color, *, heading=0.0, edge=None, label=None, alpha=0.9
+    ax,
+    center,
+    size,
+    color,
+    *,
+    heading=0.0,
+    stretch=1.0,
+    edge=None,
+    label=None,
+    alpha=0.9,
 ):
     """A filled car footprint turned to `heading` (rad), outlined in a
-    darker shade of its colour; `edge` outlines a car the text refers to."""
+    darker shade of its colour; `edge` outlines a car the text refers to.
+
+    With the y-axis drawn `stretch` times taller than x, the car is turned
+    as a rigid shape on the page, along the drawn direction of `heading`,
+    so a turned car keeps the length and shape of a straight one.
+    """
+    turn = np.arctan2(stretch * np.sin(heading), np.cos(heading))
     outline = 0.6 * np.asarray(matplotlib.colors.to_rgb(color))
     car = ax.add_patch(
         VehiclePatch(
@@ -946,12 +965,19 @@ def _draw_car(
         )
     )
     car.set_transform(
-        Affine2D().rotate_around(center[0], center[1], heading) + ax.transData
+        Affine2D()
+        .translate(-center[0], -center[1])
+        .scale(1.0, stretch)
+        .rotate(turn)
+        .scale(1.0, 1.0 / stretch)
+        .translate(center[0], center[1])
+        + ax.transData
     )
+    return car
 
 
 def _frame_strip(
-    ax, title, result, env, step, xlim, ylim, show_uncertainty=False
+    ax, title, result, env, step, xlim, ylim, stretch, show_uncertainty=False
 ):
     """One simulation frame: what the planner saw and did at `step`.
 
@@ -1026,13 +1052,13 @@ def _frame_strip(
         ms=3,
         label="0.5 s motion",
     )
-    velocity = _np(_ego_truth(result.states[step]))[2:4]
     _draw_car(
         ax,
         path[step],
         env.metadata["ego_vehicle"],
         COLORS["executed"],
-        heading=float(np.arctan2(velocity[1], max(velocity[0], 0.5))),
+        heading=_heading(_np(_ego_truth(result.states[step]))),
+        stretch=stretch,
         label="Ego",
     )
     ax.set_xlim(*xlim)
@@ -1075,7 +1101,7 @@ def _time_label(ax, center, size, time):
     )
 
 
-def _ego_ghosts(ax, result, env, step, times, dt):
+def _ego_ghosts(ax, result, env, step, times, dt, stretch):
     """Faded ego cars at earlier times, each tagged with its time.
 
     Args:
@@ -1085,6 +1111,7 @@ def _ego_ghosts(ax, result, env, step, times, dt):
         step: Step of the frame; only earlier times are drawn.
         times: Times in seconds to draw.
         dt: Step length in seconds.
+        stretch: How much taller than true scale the road is drawn.
     """
     drawn = []
     for time in times:
@@ -1099,7 +1126,8 @@ def _ego_ghosts(ax, result, env, step, times, dt):
             state[:2],
             env.metadata["ego_vehicle"],
             COLORS["executed"],
-            heading=float(np.arctan2(state[3], max(state[2], 0.5))),
+            heading=_heading(state),
+            stretch=stretch,
             alpha=0.4,
         )
         _time_label(ax, state[:2], env.metadata["ego_vehicle"], k * dt)
@@ -1173,7 +1201,9 @@ def _score_panel(ax, panels, dt, alpha, events, title):
     ax.set_xlim(0, end)
     ax.set_ylim(0, 1.05)
     ax.set_xlabel("time (s)", fontsize=PAPER_FONT, labelpad=0)
-    ax.set_ylabel("window ρ̲", fontsize=PAPER_FONT, labelpad=1)
+    ax.set_ylabel(
+        r"$\hat{r}^{\varphi,\downarrow}_0$", fontsize=PAPER_FONT, labelpad=1
+    )
     ax.tick_params(labelsize=PAPER_FONT, length=2, pad=1)
     for side in ("right", "top"):
         ax.spines[side].set_visible(False)
@@ -1313,9 +1343,17 @@ def plot_lane_paper(
             ax = axes_at(*rects[index])
             xlim = (start, start + (short_span if index else span))
             _frame_strip(
-                ax, title, result, env, step, xlim, ylim, show_uncertainty
+                ax,
+                title,
+                result,
+                env,
+                step,
+                xlim,
+                ylim,
+                stretch,
+                show_uncertainty,
             )
-            _ego_ghosts(ax, result, env, step, ghosts, dt)
+            _ego_ghosts(ax, result, env, step, ghosts, dt, stretch)
             if index:
                 ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=0)
             axes.append(ax)
@@ -1323,7 +1361,12 @@ def plot_lane_paper(
         score = axes_at(*rects[3])
         letter = chr(ord("a") + len(panels))
         _score_panel(
-            score, panels, dt, alpha, events, f"({letter}) ρ̲ per window"
+            score,
+            panels,
+            dt,
+            alpha,
+            events,
+            f"({letter}) Exact lower score per window",
         )
         axes.append(score)
         handles = {}

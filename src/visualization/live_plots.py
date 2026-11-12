@@ -30,6 +30,14 @@ def _refresh(fig, interactive):
         plt.pause(0.001)
 
 
+def _record_interval(record):
+    """An iterate's exact interval, or NaNs when it was not scored
+    (`select_by: margin` or `last` skips in-loop exact scoring)."""
+    if record.hard_interval is None:
+        return (float("nan"), float("nan"))
+    return record.hard_interval
+
+
 def create_reach_avoid_live_view(
     env,
     evaluate_controls,
@@ -117,14 +125,15 @@ def create_reach_avoid_live_view(
         _refresh(fig, interactive)
 
     def on_iteration(iteration, record):
+        interval = _record_interval(record)
         iterations.append(iteration + 1)
-        scores.append(record.hard_interval[0])
+        scores.append(interval[0])
         score_line.set_data(iterations, scores)
-        render(iteration, record.controls, record.hard_interval)
+        render(iteration, record.controls, interval)
         print(
             f"{title} iteration {iteration + 1}/{max_iters}: "
             f"loss {record.loss:.4f}, "
-            f"rho_lower {record.hard_interval[0]:.4f}",
+            f"rho_lower {interval[0]:.4f}",
             flush=True,
         )
 
@@ -300,7 +309,7 @@ def create_live_view(
         iterations.append(iteration + 1)
         losses.append(record.loss)
         smooth.append(record.smooth_lower)
-        hard.append(record.hard_interval[0])
+        hard.append(_record_interval(record)[0])
         line_loss.set_data(iterations, losses)
         line_smooth.set_data(iterations, smooth)
         line_hard.set_data(iterations, hard)
@@ -315,7 +324,7 @@ def create_live_view(
         print(
             f"{label} window {window + 1}, iteration {iteration + 1}/"
             f"{max_iters}: loss {record.loss:.4f}, "
-            f"rho_lower {record.hard_interval[0]:.4f}",
+            f"rho_lower {_record_interval(record)[0]:.4f}",
             flush=True,
         )
         _refresh(fig, interactive)

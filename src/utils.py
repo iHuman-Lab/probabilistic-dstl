@@ -1,6 +1,7 @@
 """Configuration and device helpers shared by the scenario runners."""
 
 import os
+import platform
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -62,3 +63,15 @@ def skip_run(flag, label):
         yield check
     except _SkippedRun:
         pass
+
+
+def cpu_model():
+    """The CPU model name from /proc/cpuinfo, else the platform's name."""
+    try:
+        with open("/proc/cpuinfo") as info:
+            for line in info:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine()

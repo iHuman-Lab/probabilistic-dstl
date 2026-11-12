@@ -6,7 +6,7 @@ configs/scenarios/lane/.
 
 import json
 import logging
-import platform
+import os
 from collections import Counter
 from pathlib import Path
 from time import perf_counter
@@ -33,8 +33,8 @@ from planning.environment import (
     lane_yield_possible,
     lane_yield_reached,
 )
-from planning.runners import output_path, save_result, setup_problem
-from utils import load_config
+from planning.runners import output_path, setup_problem
+from utils import cpu_model, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -95,22 +95,19 @@ def build(cfg, device=None):
     return s
 
 
-def run(
-    config_path,
+def simulate(
+    s,
     *,
-    show=True,
-    save=True,
     live=False,
     live_optimization=False,
     optimization_every=20,
     verbose=False,
     max_steps=None,
 ):
-    """Execute one lane scenario and show its figure and results table.
+    """Execute one lane scenario closed loop (receding-horizon planning).
 
     Args:
-        config_path: Lane YAML; outputs are named after its file stem.
-        show, save: Display and/or save the figure and table images.
+        s: The problem from `build`.
         live, live_optimization, optimization_every: Live execution view.
         verbose: Log progress.
         max_steps: Override the configured number of executed steps.
@@ -118,7 +115,6 @@ def run(
     Returns:
         The MPCResult.
     """
-    s = build(load_config(config_path))
     generator = _generator(s)
     initial_state = initial_state_of(s, generator=generator)
     label = "Lane merge" if s.env.metadata.get("ramp") else "Lane change"
@@ -150,10 +146,6 @@ def run(
         f"[rho_lower, rho_upper] = [{lower:.4f}, {upper:.4f}]",
         flush=True,
     )
-    stem = Path(config_path).stem
-    if show or save:
-        _present(result, s, stem=stem, show=show, save=save)
-    save_result(result, stem, save)
     return result
 
 
@@ -362,8 +354,8 @@ def _observers(s, *, label, live, optimization_every, initial_state):
     return on_step, observer.on_iteration, optimization_every
 
 
-def _present(result, s, *, stem, show, save):
-    """Display or save the selected run's figure and table."""
+def present(result, s, *, stem, show=True, save=True):
+    """Figure of the run (map, scores, controls); saved under `stem` if `save`."""
     from visualization.figures import plot_lane_merge
 
     plot_lane_merge(
@@ -855,12 +847,15 @@ def _machine(s):
         s: A built lane problem.
 
     Returns:
-        Dict with CPU, device, GPU name (None off CUDA), torch version,
-        horizon H and the planner's max_iters.
+        Dict with CPU model, torch threads, the CPUs the process may run on,
+        device, GPU name (None off CUDA), torch version, horizon H and the
+        planner's max_iters.
     """
     device = torch.device(s.dyn.device)
     return {
-        "cpu": platform.processor() or platform.machine(),
+        "cpu": cpu_model(),
+        "threads": torch.get_num_threads(),
+        "allowed cpus": sorted(os.sched_getaffinity(0)),
         "device": str(device),
         "gpu": (
             torch.cuda.get_device_name(device)
@@ -908,7 +903,7 @@ TABLE_SCENES = (
 def paper_figure(scenes=FIGURE_SCENES, *, save=True, show=False):
     """The lane paper figure from saved runs, in both page layouts.
 
-    Run each scene once with `run(...)` first (it saves outputs/<name>.pt).
+    Run each scene once first (main.py saves outputs/<name>.pt).
     The first scene is the wide frame, the others short frames, and a last
     panel plots each run's per-window lower score. The event car's brake
     time in the first scene is marked in that panel.
@@ -989,8 +984,9 @@ def latex_table(scenes=TABLE_SCENES, *, save=True):
         r"\toprule",
         (
             r"Scene & Completed & Merged/yielded & Clearance (m) & "
-            r"Lead gap (m) & Lowest $\underline{\rho}$ & "
-            r"$\underline{\rho} \geq \alpha$ (\%) & Replan med./p95 (ms) \\"
+            r"Lead gap (m) & Lowest $\widehat{r}^{\varphi,\downarrow}_0$ & "
+            r"$\widehat{r}^{\varphi,\downarrow}_0 \geq \alpha$ (\%) & "
+            r"Replan med./p95 (ms) \\"
         ),
         r"\midrule",
     ]

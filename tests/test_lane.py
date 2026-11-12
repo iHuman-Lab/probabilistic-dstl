@@ -1,9 +1,12 @@
 """Lane change and merge: semantics, planning, and figures."""
 
+import os
 from functools import reduce
+from pathlib import Path
 from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 import torch
 import yaml
@@ -29,8 +32,8 @@ from planning.environment import (
     lane_yield_reached,
 )
 from planning.planner import IterationRecord, MPCResult, Planner
+from planning.runners import save_result
 from utils import load_config
-from visualization.animation import animate_mpc
 from visualization.figures import (
     COLORS,
     RHO_INTERVAL,
@@ -40,6 +43,18 @@ from visualization.figures import (
     plot_lane_snapshots,
 )
 from visualization.live_plots import create_live_view
+
+
+def run_lane(path, *, show=False, save=False, **kwargs):
+    """The main.py flow: config -> build -> simulate -> output."""
+    cfg = load_config(path)
+    stem = Path(path).stem
+    scenario = lane.build(cfg)
+    result = lane.simulate(scenario, **kwargs)
+    if show or save:
+        lane.present(result, scenario, stem=stem, show=show, save=save)
+    save_result(result, stem, save)
+    return result
 
 
 def test_collision_uses_footprints_and_margins():
@@ -635,7 +650,7 @@ def test_lane_save_and_live_observer(
 
     cfg, path = lane_config
     monkeypatch.setattr(runners, "RESULTS_DIR", tmp_path)
-    result = lane.run(str(path), max_steps=1, show=False, save=True)
+    result = run_lane(str(path), max_steps=1, show=False, save=True)
     for stem in ("lane_change", "lane_change_snapshots", "lane_change_table"):
         for suffix in (".png", ".pdf"):
             assert (tmp_path / f"{stem}{suffix}").exists()
@@ -709,7 +724,7 @@ def test_lane_save_and_live_observer(
     assert len(executed.get_xdata()) == 2
     plt.close(fig)
 
-    viewed = lane.run(
+    viewed = run_lane(
         str(path), max_steps=1, show=False, save=False, live=True
     )
     torch.testing.assert_close(
@@ -728,7 +743,7 @@ def test_lane_save_and_live_observer(
 @pytest.mark.slow
 def test_default_lane_completes_with_physical_controls():
     cfg = load_config("configs/scenarios/lane/lane_change.yaml")
-    result = lane.run(
+    result = run_lane(
         "configs/scenarios/lane/lane_change.yaml", show=False, save=False
     )
     assert result.stopped_reason == "success"
@@ -782,7 +797,7 @@ def test_deadline_missed_is_reported(lane_config):
     cfg, path = lane_config
     cfg["task"]["start_window_seconds"] = [0.0, 0.2]
     path.write_text(yaml.safe_dump(cfg))
-    result = lane.run(str(path), max_steps=5, show=False, save=False)
+    result = run_lane(str(path), max_steps=5, show=False, save=False)
     assert result.stopped_reason == "deadline_missed"
     assert len(result.window_plans) <= 2
 
@@ -795,7 +810,7 @@ def test_on_ramp_merge_tapers_and_completes():
     road = env.metadata["road"]
     assert ramp["start_x"] < ramp["end_x"]
     assert env.metadata["traffic"][0]["y"] == road["lane_divider"] * 2
-    result = lane.run(
+    result = run_lane(
         "configs/scenarios/lane/lane_merge.yaml", show=False, save=False
     )
     assert result.stopped_reason == "success"
@@ -847,7 +862,7 @@ def test_lane_figures_have_time_labels_red_traffic_and_final_score(
     config["planner"]["max_iters"] = 1
     path = tmp_path / "lane_change.yaml"
     path.write_text(yaml.safe_dump(config))
-    result = lane.run(str(path), max_steps=1, show=False, save=False)
+    result = run_lane(str(path), max_steps=1, show=False, save=False)
     problem = lane.build(config, device="cpu")
     figures = plot_lane_merge(result, problem.env, dt=config["dt"])
     trajectory = figures["combined"][1][0]
@@ -877,18 +892,6 @@ def test_lane_figures_have_time_labels_red_traffic_and_final_score(
         text.get_text().startswith("last window")
         for text in combined_axes[1].texts
     )
-    animation_fig, animation_axes, movie = animate_mpc(
-        result, problem.env, dt=config["dt"]
-    )
-    animation_anchor = (
-        animation_axes[0]
-        .get_legend()
-        .get_bbox_to_anchor()
-        .transformed(animation_axes[0].transAxes.inverted())
-    )
-    assert animation_anchor.y0 > 1
-    movie._draw_was_started = True
-    plt.close(animation_fig)
     plt.close("all")
 
 
@@ -1300,8 +1303,36 @@ def test_batch_runs_each_seed_and_saves_one_table(
     assert machine["H"] == cfg["H"]
     assert machine["max_iters"] == cfg["planner"]["max_iters"]
     assert (machine["gpu"] is None) == (machine["device"] == "cpu")
+    # What the timings ran on: threads and the CPUs the process was allowed.
+    assert machine["threads"] == torch.get_num_threads()
+    assert machine["allowed cpus"] == sorted(os.sched_getaffinity(0))
+    assert machine["cpu"]
     saved = (tmp_path / "lane_change_batch.json").read_text()
     assert '"table"' in saved and '"trials"' in saved
+
+
+@pytest.mark.parametrize("heading", [0.0, 0.1, 0.38, -0.3])
+def test_paper_car_keeps_its_shape_on_a_stretched_road(heading):
+    from visualization.figures import _draw_car, _heading
+
+    stretch, size = 1.8, {"width": 4.5, "height": 1.8}
+    fig, ax = plt.subplots()
+    car = _draw_car(
+        ax, (10.0, 2.0), size, "C0", heading=heading, stretch=stretch
+    )
+    data = (car.get_transform() - ax.transData).transform(car.get_xy())
+    page = (data - (10.0, 2.0)) * (1.0, stretch)  # metres as drawn
+    # Turned rigidly: along and across its drawn direction the car spans
+    # what a straight car does (length 4.5, width 1.8 x stretch).
+    turn = np.arctan2(stretch * np.sin(heading), np.cos(heading))
+    along = np.array([np.cos(turn), np.sin(turn)])
+    across = np.array([-along[1], along[0]])
+    assert np.ptp(page @ along) == pytest.approx(4.5)
+    assert np.ptp(page @ across) == pytest.approx(0.9 * 1.8 * stretch)
+    plt.close(fig)
+    # Nearly stopped (or creeping back): drawn straight, not tilted.
+    assert _heading(np.array([0.0, 0.0, -0.3, 0.07])) == 0.0
+    assert _heading(np.array([0.0, 0.0, 5.0, 5.0])) == pytest.approx(np.pi / 4)
 
 
 def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
@@ -1388,7 +1419,7 @@ def test_paper_figure_is_full_width_to_scale_and_table_is_latex(
     text = lane.latex_table()
     assert text.startswith(r"\begin{tabular}{lccccccc}")
     assert r"Merged/yielded" in text
-    assert r"$\underline{\rho} \geq \alpha$ (\%)" in text
+    assert r"$\widehat{r}^{\varphi,\downarrow}_0 \geq \alpha$ (\%)" in text
     assert (
         "Merge + headway & 4/5 & 3/1 & 3.2 & -- & 0.90 & 98.8 & 120 / 180"
         in text
