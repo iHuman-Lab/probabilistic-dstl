@@ -47,3 +47,4 @@ planner:
   w_phi: 100.0
   max_iters: 15
   alpha: 0.95
+  tie_break: smooth   # if every iterate scores 0, keep the least bad
