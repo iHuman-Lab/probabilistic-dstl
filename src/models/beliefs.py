@@ -33,8 +33,11 @@ def interval_probability(low, high, mean, variance):
         probability = _cdf((mean - low) / sigma)
     else:
         a, b = (low - mean) / sigma, (high - mean) / sigma
-        probability = torch.where(
-            a > 0, _cdf(-a) - _cdf(-b), _cdf(b) - _cdf(a)
+        # Above the mean use the upper tail, Phi(-a) - Phi(-b); otherwise
+        # Phi(b) - Phi(a). Picking the arguments first costs two CDFs.
+        upper_tail = a > 0
+        probability = _cdf(torch.where(upper_tail, -a, b)) - _cdf(
+            torch.where(upper_tail, -b, a)
         )
 
     deterministic = ((mean >= low) & (mean <= high)).to(mean.dtype)

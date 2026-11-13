@@ -21,7 +21,7 @@ gradients.
 | `src/planning/environment.py` | builds environments and their pdSTL specs (reach–avoid, lane) |
 | `src/planning/planner.py` | the optimization: one window, or receding horizon |
 | `src/planning/runners.py` | shared glue: set up, `solve`, `monte_carlo`, save |
-| `src/experiments/reach_avoid.py`, `lane.py` | one file per experiment: `build(cfg)` and `run(config_path)` |
+| `src/experiments/reach_avoid.py`, `lane.py` | one file per experiment: `build(cfg)`, then `optimize` or `simulate`, and `present` |
 | `src/experiments/risk_aversion.py` | the paper's 2D comparison: pdSTL vs STLCG at three uncertainty levels |
 | `src/visualization/` | `figures`, `animation`, `live_plots` |
 | `configs/scenarios/<experiment>/*.yaml` | the numbers for each case |
@@ -176,6 +176,13 @@ road checks use the full vehicle footprint plus safety margins. A merge
 succeeds only when the target-lane dwell finishes inside the time window and
 before the ramp end. Each planning window reports its exact [ρ̲_φ, ρ̄_φ].
 
+The merge configs use a parallel on-ramp, `ramp: {gore_x, start_x, end_x}`:
+no part of the ego may be in the main lane upstream of `gore_x` (the ramp is
+a separate road there), the ramp lane is full width from `gore_x` to
+`start_x` (50 m) and tapers to zero at `end_x` (90 m, about the 300 ft AASHTO
+parallel-entrance taper). Without `gore_x` the ramp lane runs alongside the
+main lane all the way upstream, as before.
+
 Each window's formula is reach-and-stay: safe over the whole horizon, finish
 the dwell in time, then remain in the target lane with lateral speed within
 `task.settle_lateral_speed` (default 0.3 m/s) until the horizon end. Once the
@@ -186,7 +193,9 @@ monitoring truth, and reports `success` only after that settling period.
 
 Lane simulation keeps physical truth separate from the planner's beliefs.
 Initial ego and traffic states are sampled from the configured Gaussian
-priors. After each action, the simulator advances those true states with
+priors, except that true traffic starts with zero lateral speed, so cars keep
+their lane instead of drifting across it (the belief prior on that speed is
+unchanged). After each action, the simulator advances those true states with
 process noise, generates independent noisy observations of `[x, y, vx, vy]`,
 and applies a full-state Kalman update to the predicted beliefs. The first
 planning window uses the prior; the first observation follows its action.
@@ -195,6 +204,12 @@ planning window uses the prior; the first observation follows its action.
 standard deviations as a positive scalar or four values (units m, m, m/s,
 m/s). Both default to `0.1` per component. These are illustrative sensor
 settings, independent of `q_std` and `traffic_q_std` (process noise).
+
+`traffic_filter_accel_std` (m/s^2, default 0) adds white-noise longitudinal
+acceleration to the traffic noise the Kalman filter assumes, so its estimate
+follows a car that brakes without warning. The merge configs set it to the
+brake size, 2.0. The true traffic and the planner's constant-velocity
+prediction keep `traffic_q_std`.
 
 The planner uses posterior means/covariances and estimates dwell progress
 from the posterior mean. The physical monitor independently tracks true dwell
@@ -211,8 +226,11 @@ updates; task-progress estimates are not a probabilistic history filter.
 `lane.trial` uses a local generator seeded from the scenario, and accepts
 explicit initial states, process disturbances, observation noise, or a
 `torch.Generator` for reproducible trials without changing global RNG state.
-Custom initial states must be `LaneState` records with truth and beliefs;
-older saved state tuples remain plottable.
+Custom initial states must be `LaneState` records with truth and beliefs.
+
+The temporal operators are the recurrent register in `src/pdstl/operators.py`.
+A parallel evaluation (all windows at once) and its timing benchmark are kept
+on the `lane-merge-clean` branch.
 
 ## Scope: what the numbers mean
 
@@ -233,8 +251,10 @@ older saved state tuples remain plottable.
    (the Fréchet lower bound of a conjunction is 0 until its parts are likely),
    so a gradient method needs a starting path. The route only chooses where to
    start; ρ̲_φ and the Monte Carlo rate evaluate the plan that comes out.
-5. **The lane first-window guess is a hand-shaped manoeuvre** (`warm_start:` in
-   the lane YAMLs), the same kind of choice as item 4.
+5. **The lane first-window guesses are hand-shaped manoeuvres** (`warm_starts:`
+   in the lane YAMLs), the same kind of choice as item 4. The first window is
+   solved from each and the best plan seeds the loop; on a tie the earlier one
+   wins, so the YAML order is the stated preference.
 6. **Lane values are per window and open loop.** Success, collision and the
    other outcomes are sampled closed-loop executions, not guarantees.
 7. **Reproducibility.** Reach–avoid is deterministic; lane and Monte Carlo are
@@ -256,10 +276,52 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-Set each block in `src/main.py` to `"run"` or `"skip"`. Each block reads
-config → scenario → result (`load_config`, `build`, `run`). Figures are shown,
-then saved to `outputs/` (git-ignored) when closed: PNG, PDF, a GIF, and a
-`.pt` result (`torch.load(path, weights_only=False)`).
+Set each block in `src/main.py` to `"run"` or `"skip"`. Each lane block
+reads config → scenario → result → outputs (`load_config`, `build`,
+`simulate`, `present`). Figures are shown, then saved to `outputs/`
+(git-ignored) when closed, with a `.pt` result
+(`torch.load(path, weights_only=False)`).
+
+The on-ramp merge has one YAML per STL specification:
+
+| Block | YAML | Specification | What to look for |
+| --- | --- | --- | --- |
+| `LaneMerge` | `lane_merge.yaml` | A: safe, merge in the window, dwell, stay settled | merges; closes on the braking lead |
+| `LaneBatch` only | `lane_headway.yaml` | B: A + gap to `lead` ≥ 22 m once touching the lane | same scene, keeps the gap |
+| `LaneMergeOrYield` | `lane_merge_or_yield.yaml` | C: A's merge, or stop in the yield region | dense traffic: stops |
+| `LaneMergeOrYieldGap` | `lane_merge_or_yield_gap.yaml` | C, same rule | one open gap: merges |
+| `LaneBatch` | all four | 20 seeds, no plots | outcome and timing table |
+
+A and B share their scene and seed, as do the two C scenes; only the rule (or
+only the traffic) differs. In A/B the `lead` car brakes at 4 s (`brake:` in
+the YAML); the planner is not told and replans from measurements. Each run
+shows the run figure, a snapshot figure naming every car, and a results
+table, and saves them with the `.pt` result in `outputs/`. Leave live
+drawing (`lane.simulate(..., live_optimization=True)`) off when reading
+timings: drawing runs inside the replanning timer. `lane.batch` saves `outputs/<name>_batch.json`.
+
+For the paper, block `LanePaper` builds one full-width figure (7.16 in wide,
+about 2.3 in tall) from the saved runs. Each panel is the simulation at one
+chosen moment: shaded lanes, every car with a 0.5 s motion arrow, the path
+driven so far, the plan made at that moment, and the ego turned to its
+heading. (a) merge is full width; (b) dense and (c) one-gap merge-or-yield
+share a row. Titles give each spec in short form; the exact specs are in the
+comment above `FIGURE_SCENES` in `lane.py`, for the caption. The road is
+drawn 1.4x taller than true scale. The plan's predicted 95% region is off by
+default (`show_uncertainty=True` draws it): at these noise levels it is too
+small to see. Headway is reported in `outputs/lane_table.tex`, written from
+the batch results: completed trials, closest clearance and lead gap, lowest
+window score, replanning median/p95.
+
+Two planner settings keep the closed loop steady; the lane YAMLs set both
+(defaults elsewhere are unchanged):
+
+- `warm_tail: zero`: each new window's guess ends in a zero control instead of
+  repeating the last one, so a leftover acceleration is not held to the end of
+  the next plan (it was the cause of mid-merge score dips).
+- `tie_break: smooth`: if several iterates share the best exact score (often
+  all 0 after a surprise), keep the one with the best smooth score instead of
+  the last one.
 
 ## Development checks
 

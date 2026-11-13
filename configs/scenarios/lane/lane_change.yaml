@@ -39,10 +39,12 @@ accel_bounds:
   lateral: [-2.0, 2.0]
 
 # Planner configuration
-warm_start: {longitudinal: 0.8, lateral: 0.9, switch_step: 10}
+warm_starts:
+  - {longitudinal: 0.8, lateral: 0.9, switch_step: 10}
 planner:
   w_u: 0.002
   w_du: 0.005
   w_phi: 100.0
   max_iters: 15
   alpha: 0.95
+  tie_break: smooth   # if every iterate scores 0, keep the least bad

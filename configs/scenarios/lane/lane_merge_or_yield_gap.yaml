@@ -1,0 +1,64 @@
+# C, merge or yield (one gap): the same rule and ego as the dense scene,
+# but a 16 m gap opens beside the ego, so both options are possible.
+dynamics: double_integrator
+H: 30
+T_SIM: 40
+seed: 2
+dt: 0.2
+u_max: 2.5
+q_std: 0.005
+x0_mean: [0.0, 0.0, 6.0, 0.0]
+x0_cov_scale: 0.01
+observation:
+  ego_std: [0.1, 0.1, 0.1, 0.1]
+  traffic_std: [0.1, 0.1, 0.1, 0.1]
+road: {y_min: -1.8, y_max: 5.4, lane_divider: 1.8}
+# Parallel on-ramp: no merging before the gore, then a 50 m full-width lane
+# and a 90 m taper (about the 300 ft AASHTO parallel-entrance taper).
+ramp: {gore_x: 0.0, start_x: 50.0, end_x: 140.0}
+goal: {x_range: [-10.0, 150.0], y_range: [1.8, 5.4]}
+ego_vehicle: {width: 4.5, height: 1.8}
+traffic:
+  - {name: lead, x0: 6.0, y: 3.6, speed: 6.0, width: 4.5, height: 1.8}
+  - {name: target_front, x0: 15.0, y: 3.6, speed: 6.0, width: 4.5, height: 1.8}
+  - {name: target_rear, x0: -10.0, y: 3.6, speed: 6.0, width: 4.5, height: 1.8}
+traffic_q_std: 0.005
+# The filter allows longitudinal acceleration of this std (m/s^2, the
+# brake size) so its estimate can follow a braking car; the planner still
+# predicts constant velocity from that estimate.
+traffic_filter_accel_std: 2.0
+traffic_cov_scale: 0.01
+safety_margin: {longitudinal: 0.5, lateral: 0.2}
+task:
+  spec: merge_or_yield
+  target_center: 3.6
+  target_tolerance: 1.2
+  start_window_seconds: [0.8, 4.0]
+  dwell_seconds: 0.6
+  settle_seconds: 1.0
+  settle_lateral_speed: 0.3
+  yield:
+    x_range: [4.0, 24.0]
+    y_range: [-1.8, 1.8]
+    window_seconds: [2.4, 4.8]
+    dwell_seconds: 0.8
+    stopped_speed: [0.4, 0.3]
+# Permit small signed stopped velocities under process/observation noise.
+speed_bounds: [-0.5, 25.0]
+accel_bounds:
+  longitudinal: [-2.5, 2.5]
+  lateral: [-2.0, 2.0]
+
+# The first window is solved from both guesses and the better plan is kept.
+# On a tie the first one (merge) wins: a merge as safe as stopping is taken.
+warm_starts:
+  - {longitudinal: -0.3, lateral: 1.8, switch_step: 6}   # merge
+  - {longitudinal: -2.0, lateral: 0.0, switch_step: 10}  # yield
+planner:
+  w_u: 0.002
+  w_du: 0.005
+  w_phi: 100.0
+  max_iters: 15
+  alpha: 0.95
+  warm_tail: zero     # next guess ends in zero acceleration
+  tie_break: smooth   # if every iterate scores 0, keep the least bad

@@ -4,10 +4,13 @@ from math import log, sqrt
 from pathlib import Path
 
 import matplotlib
-import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib import patches
+from matplotlib.transforms import Affine2D
+
+from planning.environment import lane_lead_gap
 
 COLORS = {
     "mean": "tab:blue",
@@ -18,8 +21,16 @@ COLORS = {
     "workspace": "tab:gray",
     "score": "tab:purple",
     "ellipse": "tab:blue",
-    "traffic": "tab:red",
+    "traffic": "tab:gray",
     "target": "goldenrod",
+    # Yield zone: the light-fill / dark-edge purple of the 2D visit region.
+    "yield_fill": "#c5b0d5",
+    "yield_edge": "#9467bd",
+    # Non-drivable ramp end: the light-fill / dark-edge red of 2D obstacles.
+    "blocked_fill": "#ff9896",
+    "blocked_edge": "#d62728",
+    # Target lane: the light green of the 2D goal region.
+    "lane_fill": "#98df8a",
 }
 
 
@@ -27,8 +38,6 @@ def _chi2_radius(confidence):
     """Mahalanobis radius of a 2-D Gaussian's `confidence` region."""
     return sqrt(-2 * log(1 - confidence))
 
-
-CHI95_RADIUS = _chi2_radius(0.95)
 
 # pdSTL lower and upper stochastic robustness of the spec φ. They are a
 # robustness interval, not bounds on the probability that φ holds.
@@ -237,8 +246,17 @@ def _draw_environment(ax, env, *, lane=False):
             )
             ax.plot(x, lower, color=COLORS["workspace"], linewidth=1.3)
             ax.axhline(road["y_max"], color=COLORS["workspace"], linewidth=1.3)
+            gore = ramp.get("gore_x")
+            if gore is not None:
+                ax.plot(
+                    [extent[0], gore],
+                    [road["lane_divider"], road["lane_divider"]],
+                    color=COLORS["workspace"],
+                    linewidth=1.3,
+                    label="Gore (no merging)",
+                )
             ax.plot(
-                [extent[0], start],
+                [extent[0] if gore is None else gore, start],
                 [road["lane_divider"], road["lane_divider"]],
                 color=COLORS["workspace"],
                 linestyle="--",
@@ -264,6 +282,19 @@ def _draw_environment(ax, env, *, lane=False):
                 label="Goal lane",
             )
         )
+        if "yield" in env.regions:
+            region = env.region("yield")
+            ax.add_patch(
+                patches.Rectangle(
+                    (region.xmin, region.ymin),
+                    region.xmax - region.xmin,
+                    region.ymax - region.ymin,
+                    facecolor=COLORS["yield_fill"],
+                    edgecolor=COLORS["yield_edge"],
+                    alpha=0.4,
+                    label="Yield region",
+                )
+            )
         moving = {}
         for index, vehicle in enumerate(env.metadata["traffic"]):
             name = vehicle["name"]
@@ -506,22 +537,33 @@ def plot_reach_avoid(
 
 def _mark_lane_task_window(ax, env, dt):
     task = env.metadata["task"]
-    start, end = task["start_end_steps"]
-    latest_start = end - task["dwell_steps"]
-    ax.axvspan(
-        start * dt,
-        latest_start * dt,
-        color=COLORS["goal"],
-        alpha=0.10,
-        label="Dwell-start window",
-    )
-    ax.axvline(
-        end * dt,
-        color=COLORS["obstacle"],
-        linestyle="--",
-        linewidth=1,
-        label="Completion deadline",
-    )
+    windows = [(task, "Dwell-start window", "Completion deadline", "goal")]
+    if task["spec"] == "merge_or_yield":
+        windows.append(
+            (
+                task["yield"],
+                "Yield dwell-start window",
+                "Yield completion deadline",
+                "target",
+            )
+        )
+    for window, label, deadline, color in windows:
+        start, end = window["start_end_steps"]
+        latest_start = end - window["dwell_steps"]
+        ax.axvspan(
+            start * dt,
+            latest_start * dt,
+            color=COLORS[color],
+            alpha=0.10,
+            label=label,
+        )
+        ax.axvline(
+            end * dt,
+            color=COLORS[color],
+            linestyle="--",
+            linewidth=1,
+            label=deadline,
+        )
 
 
 def _plot_execution(result, env, *, dt, save_path, show):
@@ -572,7 +614,26 @@ def _plot_execution(result, env, *, dt, save_path, show):
             label="Traffic path" if index == 0 else "_nolegend_",
         )
     _move_obstacle(moving, env, len(result.states) - 1, result.states[-1])
-    ax_map.set_xlim(means[:, 0].min() - 2, means[:, 0].max() + 18)
+    # Frame the ego path and every car's final position.
+    traffic = _np(_traffic_truth(result.states[-1]))[:, 0]
+    right = max(means[:, 0].max() + 18, traffic.max() + 4)
+    if "yield" in env.regions:
+        right = max(right, env.region("yield").xmax + 2)
+    ax_map.set_xlim(min(means[:, 0].min(), traffic.min()) - 4, right)
+    elapsed = dt * np.arange(len(means))
+    labeled = None
+    for second in range(int(np.floor(elapsed[-1])) + 1):
+        index = int(np.argmin(np.abs(elapsed - second)))
+        # Skip labels that would overlap while the ego is (nearly) stopped.
+        if labeled is None or abs(means[index, 0] - labeled) > 3.0:
+            ax_map.annotate(
+                f"t={second} s",
+                means[index],
+                xytext=(4, 8),
+                textcoords="offset points",
+                fontsize=8,
+            )
+            labeled = means[index, 0]
     reason = result.stopped_reason.replace("_", " ")
     ax_map.text(
         0.98,
@@ -625,7 +686,13 @@ def _plot_execution(result, env, *, dt, save_path, show):
     _mark_lane_task_window(ax_score, env, dt)
     ax_score.set(xlabel="executed time [s]", ylabel="robustness per window")
     _style(ax_score, probability=True)
-    _unique_legend(ax_score, loc="best")
+    if len(intervals):
+        # The smooth surrogate can be negative; keep it on the axis.
+        smooth = min(plan.smooth_lower for plan in result.window_plans)
+        ax_score.set_ylim(bottom=min(-0.03, smooth - 0.05))
+    _unique_legend(
+        ax_score, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3
+    )
     controls = _np(result.applied_controls)
     for dimension in range(controls.shape[1]):
         ax_control.step(
@@ -643,107 +710,687 @@ def _plot_execution(result, env, *, dt, save_path, show):
 
 
 def plot_lane_merge(result, env, *, dt, save_path=None, show=False):
-    """Save one combined result and one local-scale lane trajectory view."""
+    """Show the combined figure, the snapshot figure and a results table."""
+    from experiments.lane import summarize
 
     combined = _plot_execution(
         result, env, dt=dt, save_path=save_path, show=show
     )
-
-    def output(kind):
-        if save_path is None:
-            return None
-        stem = Path(save_path).with_suffix("")
-        return stem.with_name(f"{stem.name}_{kind}.png")
-
-    means = np.asarray([_np(_ego_truth(state))[:2] for state in result.states])
-
-    trajectory_fig, ax_map = plt.subplots(
-        figsize=(12, 4.2), layout="constrained"
+    snapshots = plot_lane_snapshots(
+        result,
+        env,
+        dt=dt,
+        save_path=_sibling(save_path, "snapshots"),
+        show=show,
     )
-    moving = _draw_environment(ax_map, env, lane=True)
-    ax_map.plot(
-        means[:, 0],
-        means[:, 1],
-        color=COLORS["executed"],
-        linewidth=2,
-        label="Executed",
-        zorder=5,
+    rows = []
+    for label, value in summarize(result, env, dt).items():
+        if value is None:
+            value = "N/A"
+        elif isinstance(value, float):
+            value = f"{value:.3f}"
+        rows.append((label, value))
+    fig, ax = plt.subplots(figsize=(7, 5), layout="constrained")
+    ax.set_axis_off()
+    ax.set_title(env.metadata["task"]["spec"].replace("_", " ").capitalize())
+    table = ax.table(
+        cellText=rows,
+        colLabels=["Metric", "Value"],
+        cellLoc="left",
+        colWidths=[0.7, 0.3],
+        bbox=[0, 0, 1, 0.95],
     )
-    ax_map.scatter(
-        means[0, 0],
-        means[0, 1],
-        color=COLORS["executed"],
-        s=25,
-        label="Start",
-        zorder=6,
-    )
-    for index in _selected_windows(len(result.window_plans)):
-        plan = _np(result.window_plans[index].rollout.aux["mean_trace"])[0]
-        ax_map.plot(
-            plan[:, 0],
-            plan[:, 1],
-            color=COLORS["planned"],
-            linewidth=1.1,
-            alpha=0.55,
-            label="Plan",
-        )
-    for index, _vehicle in enumerate(env.metadata["traffic"]):
-        positions = np.asarray(
-            [_np(_traffic_truth(state)[index])[:2] for state in result.states]
-        )
-        ax_map.plot(
-            positions[:, 0],
-            positions[:, 1],
-            color=COLORS["traffic"],
-            linestyle=":",
-            linewidth=1.2,
-            label="Traffic path" if index == 0 else "_nolegend_",
-        )
-    _move_obstacle(moving, env, len(result.states) - 1, result.states[-1])
-    _draw_ego_vehicle(ax_map, env, means[-1])
-    ax_map.set_xlim(means[:, 0].min() - 2, means[:, 0].max() + 18)
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    _finish(fig, _sibling(save_path, "table"), show)
+    return {"combined": combined, "snapshots": snapshots, "table": (fig, ax)}
 
-    elapsed = dt * np.arange(len(means))
-    used = set()
-    for second in range(int(np.floor(elapsed[-1])) + 1):
-        index = int(np.argmin(np.abs(elapsed - second)))
-        if index in used:
-            continue
-        used.add(index)
-        ax_map.annotate(
-            f"t={second} s",
-            means[index],
-            xytext=(4, 8 if second % 2 == 0 else -15),
-            textcoords="offset points",
-            fontsize=8,
+
+def _sibling(save_path, kind):
+    """`outputs/x.png` -> `outputs/x_<kind>.png` (None stays None)."""
+    if save_path is None:
+        return None
+    stem = Path(save_path).with_suffix("")
+    return stem.with_name(f"{stem.name}_{kind}.png")
+
+
+def plot_lane_snapshots(
+    result,
+    env,
+    *,
+    dt,
+    number=5,
+    view=(-60.0, 60.0),
+    save_path=None,
+    show=False,
+):
+    """Top-down panels of the whole scene at evenly spaced moments.
+
+    Every traffic car is drawn at its true position with its name, together
+    with the ego, its path so far and the plan made at that moment.
+
+    Args:
+        result: MPCResult from a lane trial.
+        env: The trial's lane environment.
+        dt: Step length in seconds.
+        number: How many moments to show (always including first and last).
+        view: Longitudinal window around the ego, (behind, ahead) in metres.
+        save_path, show: PNG/PDF output path and interactive display.
+
+    Returns:
+        (figure, axes).
+    """
+    count = len(result.states)
+    steps = sorted({int(k) for k in np.linspace(0, count - 1, number)})
+    path = np.asarray([_np(_ego_truth(state))[:2] for state in result.states])
+    road = env.metadata["road"]
+    headway = "headway" in env.metadata["task"]
+    fig, axes = plt.subplots(
+        len(steps),
+        1,
+        figsize=(11, 1.9 * len(steps) + 0.6),
+        layout="constrained",
+    )
+    axes = np.atleast_1d(axes)
+    for ax, step in zip(axes, steps):
+        state = result.states[step]
+        moving = _draw_environment(ax, env, lane=True)
+        _move_obstacle(moving, env, step, state)
+        cars = _np(_traffic_truth(state))
+        for car, position in zip(env.metadata["traffic"], cars):
+            ax.annotate(
+                car["name"],
+                (position[0], position[1] + car["height"] / 2),
+                xytext=(0, 2),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color=COLORS["traffic"],
+                annotation_clip=True,
+            )
+        ax.plot(
+            *path[: step + 1].T,
             color=COLORS["executed"],
-            bbox={
-                "facecolor": "white",
-                "edgecolor": "none",
-                "alpha": 0.72,
-                "pad": 1,
-            },
+            linewidth=1.8,
+            label="Executed",
         )
-    ax_map.text(
-        0.99,
-        0.04,
-        (
-            f"Outcome: {result.stopped_reason.replace('_', ' ')}\n"
-            f"last window {RHO_INTERVAL} = "
-            f"[{result.window_plans[-1].hard_interval[0]:.3f}, "
-            f"{result.window_plans[-1].hard_interval[1]:.3f}]"
-            if result.window_plans
-            else f"Outcome: {result.stopped_reason.replace('_', ' ')}"
-        ),
-        transform=ax_map.transAxes,
-        ha="right",
-        fontsize=9,
-    )
+        title = f"t = {step * dt:.1f} s"
+        if step < len(result.window_plans):
+            plan = result.window_plans[step]
+            mean = _np(plan.rollout.aux["mean_trace"])[0]
+            ax.plot(
+                mean[:, 0],
+                mean[:, 1],
+                color=COLORS["planned"],
+                linestyle="--",
+                linewidth=1.3,
+                label="Current plan",
+            )
+            title += f",  plan {RHO_LOWER} = {plan.hard_interval[0]:.2f}"
+        if headway:
+            gap = lane_lead_gap(env, state.ego_true, state.traffic_true)
+            lead = env.metadata["task"]["headway"]["lead_vehicle"]
+            title += f",  gap to {lead} = {gap:.1f} m"
+        _draw_ego_vehicle(ax, env, path[step])
+        ax.set_xlim(path[step, 0] + view[0], path[step, 0] + view[1])
+        ax.set_ylim(road["y_min"] - 0.6, road["y_max"] + 1.4)
+        ax.set_title(title, loc="left", fontsize=10)
+        ax.set_ylabel("y (m)")
+        ax.set_xlabel("")
+    axes[-1].set_xlabel("x (m)")
     _unique_legend(
-        ax_map, loc="lower center", bbox_to_anchor=(0.5, 1.12), ncol=7
+        axes[0], loc="lower right", bbox_to_anchor=(1.0, 1.02), ncol=6
     )
-    _finish(trajectory_fig, output("trajectory"), show)
-    return {
-        "combined": combined,
-        "trajectory": (trajectory_fig, ax_map),
+    _finish(fig, save_path, show)
+    return fig, axes
+
+
+# --- Paper figure ---------------------------------------------------------------
+
+PAPER_WIDTH = 7.16  # in, IEEE two-column text width
+COLUMN_WIDTH = 3.5  # in, IEEE column width
+PAPER_FONT = 7  # pt
+
+
+def _draw_road(ax, env):
+    """Shaded lanes (target lane green), edges, divider, ramp taper."""
+    road = env.metadata["road"]
+    ramp = env.metadata.get("ramp")
+    edge = {"color": "0.2", "linewidth": 1.1}
+    ax.axhspan(
+        road["lane_divider"],
+        road["y_max"],
+        color=COLORS["lane_fill"],
+        alpha=0.5,
+        lw=0,
+        label="Target lane",
+    )
+    if ramp is None:
+        ax.axhspan(
+            road["y_min"], road["lane_divider"], color="0.5", alpha=0.06, lw=0
+        )
+    else:
+        ax.fill_between(
+            [-1e3, ramp["start_x"], ramp["end_x"]],
+            [road["y_min"], road["y_min"], road["lane_divider"]],
+            road["lane_divider"],
+            color="0.5",
+            alpha=0.06,
+            lw=0,
+        )
+    divider = {"color": "0.3", "linewidth": 0.9, "linestyle": "--"}
+    ax.axhline(road["y_max"], **edge)
+    if ramp is None:
+        ax.axhline(road["y_min"], **edge)
+        ax.axhline(road["lane_divider"], **divider)
+    else:
+        start, end = ramp["start_x"], ramp["end_x"]
+        middle = road["lane_divider"]
+        ax.plot(
+            [-1e3, start, end, 1e3], [road["y_min"]] * 2 + [middle] * 2, **edge
+        )
+        gore = ramp.get("gore_x")
+        if gore is None:
+            ax.plot([-1e3, start], [middle] * 2, **divider)
+        else:
+            ax.plot([-1e3, gore], [middle] * 2, **edge)  # separate roads
+            ax.plot([gore, start], [middle] * 2, **divider)
+        ax.fill_between(
+            [start, end],
+            [road["y_min"], middle],
+            road["y_min"],
+            facecolor=COLORS["blocked_fill"],
+            edgecolor=COLORS["blocked_edge"],
+            hatch="//",
+            alpha=0.9,
+            lw=0.8,
+            label="Ramp end",
+        )
+    if "yield" in env.regions:
+        zone = env.region("yield")
+        ax.add_patch(
+            patches.Rectangle(
+                (zone.xmin, zone.ymin),
+                zone.xmax - zone.xmin,
+                zone.ymax - zone.ymin,
+                facecolor=COLORS["yield_fill"],
+                edgecolor=COLORS["yield_edge"],
+                alpha=0.6,
+                lw=0.8,
+                label="Yield zone",
+            )
+        )
+
+
+def _heading(state):
+    """Direction of travel (rad) from the velocity; 0 when nearly stopped."""
+    vx, vy = state[2], state[3]
+    return 0.0 if vx < 0.5 else float(np.arctan2(vy, vx))
+
+
+def _draw_car(
+    ax,
+    center,
+    size,
+    color,
+    *,
+    heading=0.0,
+    stretch=1.0,
+    edge=None,
+    label=None,
+    alpha=0.9,
+):
+    """A filled car footprint turned to `heading` (rad), outlined in a
+    darker shade of its colour; `edge` outlines a car the text refers to.
+
+    With the y-axis drawn `stretch` times taller than x, the car is turned
+    as a rigid shape on the page, along the drawn direction of `heading`,
+    so a turned car keeps the length and shape of a straight one.
+    """
+    turn = np.arctan2(stretch * np.sin(heading), np.cos(heading))
+    outline = 0.6 * np.asarray(matplotlib.colors.to_rgb(color))
+    car = ax.add_patch(
+        VehiclePatch(
+            center[0] - size["width"] / 2,
+            center[1] - size["height"] / 2,
+            size["width"],
+            size["height"],
+            facecolor=color,
+            edgecolor=edge or tuple(outline),
+            linewidth=0.9 if edge else 0.6,
+            alpha=alpha,
+            label=label,
+            zorder=4,
+        )
+    )
+    car.set_transform(
+        Affine2D()
+        .translate(-center[0], -center[1])
+        .scale(1.0, stretch)
+        .rotate(turn)
+        .scale(1.0, 1.0 / stretch)
+        .translate(center[0], center[1])
+        + ax.transData
+    )
+    return car
+
+
+def _frame_strip(
+    ax, title, result, env, step, xlim, ylim, stretch, show_uncertainty=False
+):
+    """One simulation frame: what the planner saw and did at `step`.
+
+    Every car at its true position, the ego path driven so far, and the
+    plan made at this step (dashed), optionally with the 95% position
+    region of its predicted belief. The ego is turned to its heading.
+    """
+    _draw_road(ax, env)
+    path = np.asarray([_np(_ego_truth(state))[:2] for state in result.states])
+    ax.plot(
+        *path[: step + 1].T,
+        color=COLORS["executed"],
+        lw=1.1,
+        zorder=3,
+        label="Driven path",
+    )
+    if step < len(result.window_plans):
+        aux = result.window_plans[step].rollout.aux
+        mean = _np(aux["mean_trace"])[0]
+        covariance = _np(aux["cov_trace"])[0]
+        # The predicted 95% position region along the plan, as one band.
+        for k in range(1, len(mean), 2) if show_uncertainty else ():
+            width, height, angle = _ellipse_parameters(covariance[k][:2, :2])
+            ax.add_patch(
+                patches.Ellipse(
+                    mean[k, :2],
+                    width,
+                    height,
+                    angle=angle,
+                    facecolor=COLORS["ellipse"],
+                    edgecolor="none",
+                    alpha=0.18,
+                    zorder=2,
+                    label="Predicted 95% region",
+                )
+            )
+        ax.plot(
+            mean[:, 0],
+            mean[:, 1],
+            color=COLORS["planned"],
+            lw=1.0,
+            ls="--",
+            zorder=3,
+            label="Current plan",
+        )
+    cars = _np(_traffic_truth(result.states[step]))
+    for car, center in zip(env.metadata["traffic"], cars):
+        # Where the car's front will be in 0.5 s at its current speed.
+        front = center[0] + car["width"] / 2
+        ax.annotate(
+            "",
+            xy=(front + center[2] * 0.5, center[1]),
+            xytext=(front, center[1]),
+            arrowprops={
+                "arrowstyle": "-|>",
+                "lw": 0.6,
+                "color": "0.45",
+                "shrinkA": 0,
+                "shrinkB": 0,
+                "mutation_scale": 5,
+            },
+            annotation_clip=True,
+            zorder=3,
+        )
+        _draw_car(ax, center[:2], car, COLORS["traffic"], label="Traffic")
+    ax.plot(
+        [],
+        [],
+        color="0.45",
+        lw=0.6,
+        marker=">",
+        ms=3,
+        label="0.5 s motion",
+    )
+    _draw_car(
+        ax,
+        path[step],
+        env.metadata["ego_vehicle"],
+        COLORS["executed"],
+        heading=_heading(_np(_ego_truth(result.states[step]))),
+        stretch=stretch,
+        label="Ego",
+    )
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_yticks([])
+    for side in ("left", "right", "top"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color("0.6")
+    ax.tick_params(labelsize=PAPER_FONT, length=2, pad=1, color="0.6")
+    ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
+
+
+SCORE_STYLES = (("tab:blue", "-"), ("tab:orange", "--"), ("tab:gray", ":"))
+
+
+def _time_label(ax, center, size, time):
+    """A time tag such as "1.6 s" just above a drawn ego car.
+
+    Args:
+        ax: Axes of the frame.
+        center: Car centre (x, y).
+        size: Car size dict with "height".
+        time: Time in seconds.
+    """
+    ax.text(
+        center[0],
+        center[1] + size["height"] / 2 + 0.25,
+        f"{time:g} s",
+        fontsize=PAPER_FONT - 1,
+        color=COLORS["executed"],
+        ha="center",
+        va="bottom",
+        zorder=6,
+        bbox={
+            "boxstyle": "round,pad=0.12",
+            "fc": "white",
+            "ec": "none",
+            "alpha": 0.85,
+        },
+    )
+
+
+def _ego_ghosts(ax, result, env, step, times, dt, stretch):
+    """Faded ego cars at earlier times, each tagged with its time.
+
+    Args:
+        ax: Axes of one frame.
+        result: MPCResult of the run.
+        env: Lane environment.
+        step: Step of the frame; only earlier times are drawn.
+        times: Times in seconds to draw.
+        dt: Step length in seconds.
+        stretch: How much taller than true scale the road is drawn.
+    """
+    drawn = []
+    for time in times:
+        k = round(time / dt)
+        state = _np(_ego_truth(result.states[k])) if k < step else None
+        # Skip a ghost that would sit on top of one already drawn.
+        if state is None or any(abs(state[0] - x) < 5.5 for x in drawn):
+            continue
+        drawn.append(state[0])
+        _draw_car(
+            ax,
+            state[:2],
+            env.metadata["ego_vehicle"],
+            COLORS["executed"],
+            heading=_heading(state),
+            stretch=stretch,
+            alpha=0.4,
+        )
+        _time_label(ax, state[:2], env.metadata["ego_vehicle"], k * dt)
+    now = _np(_ego_truth(result.states[step]))
+    _time_label(ax, now[:2], env.metadata["ego_vehicle"], step * dt)
+
+
+def _score_panel(ax, panels, dt, alpha, events, title):
+    """Each run's per-window lower score over time, with alpha and events.
+
+    Args:
+        ax: Axes for the panel.
+        panels: (title, result, env, step, ghosts, label) per run.
+        dt: Step length in seconds.
+        alpha: Threshold line, or None.
+        events: (time, text) pairs drawn as vertical lines.
+        title: Panel title.
+    """
+    end = 0.0
+    for index, (_t, result, _e, _s, _g, label) in enumerate(panels):
+        color, style = SCORE_STYLES[index]
+        scores = [plan.hard_interval[0] for plan in result.window_plans]
+        times = np.arange(len(scores)) * dt
+        end = max(end, len(scores) * dt)
+        ax.step(
+            times,
+            scores,
+            where="post",
+            color=color,
+            ls=style,
+            lw=1.0,
+            label=label,
+        )
+        final = result.states[-1]
+        done = final.true_completed or final.true_yield_completed
+        if done is not None:
+            # The first run's marker is hollow so a marker on top shows.
+            first = index == 0
+            ax.plot(
+                done * dt,
+                scores[min(done, len(scores) - 1)],
+                "o",
+                ms=5 if first else 3,
+                color=color,
+                mfc="none" if first else color,
+                zorder=5,
+            )
+    end += 0.2
+    if alpha is not None:
+        ax.axhline(alpha, color="0.3", lw=0.6, ls=(0, (1, 1)))
+        ax.text(
+            end,
+            alpha - 0.04,
+            r"$\alpha$",
+            fontsize=PAPER_FONT,
+            ha="right",
+            va="top",
+            color="0.3",
+        )
+    for time, text in events:
+        ax.axvline(time, color="0.6", lw=0.6)
+        ax.text(
+            time + 0.08,
+            0.6,
+            text,
+            fontsize=PAPER_FONT - 1,
+            va="bottom",
+            color="0.4",
+        )
+    ax.plot([], [], "o", color="0.3", ms=3, label="task done")
+    ax.set_xlim(0, end)
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel("time (s)", fontsize=PAPER_FONT, labelpad=0)
+    ax.set_ylabel(
+        r"$\hat{r}^{\varphi,\downarrow}_0$", fontsize=PAPER_FONT, labelpad=1
+    )
+    ax.tick_params(labelsize=PAPER_FONT, length=2, pad=1)
+    for side in ("right", "top"):
+        ax.spines[side].set_visible(False)
+    ax.legend(
+        fontsize=PAPER_FONT - 1,
+        frameon=False,
+        loc="lower right",
+        handlelength=1.6,
+        borderaxespad=0.1,
+        labelspacing=0.2,
+    )
+    ax.set_title(title, loc="left", fontsize=PAPER_FONT, pad=1.5)
+
+
+def _paper_layout(column, road_height, span, short_span, stretch):
+    """Panel rectangles for the two-column or the one-column figure.
+
+    Every frame has the same metres per inch along x. Two-column: the wide
+    frame on top, then two short frames and the score panel in one row.
+    One-column: the wide frame, then the two short frames side by side,
+    then the score panel across the full width.
+
+    Args:
+        column: One-column layout instead of two-column.
+        road_height: Shown road height in metres.
+        span: Metres across the wide frame.
+        short_span: Metres in each short frame (two-column only; one-column
+            short frames take half the width each).
+        stretch: How much taller than true scale the road is drawn.
+
+    Returns:
+        (width, height, rectangles, short_span, legend_columns): sizes in
+        inches; rectangles (left, bottom, width, height) for the wide frame,
+        the two short frames and the score panel.
+    """
+    margin, gap = 0.04, 0.14
+    title_h, ticks_h, label_h = 0.16, 0.13, 0.15
+    fig_w = COLUMN_WIDTH if column else PAPER_WIDTH
+    width = fig_w - 2 * margin
+    per_inch = span / width  # metres per inch along x, every frame
+    strip = road_height / per_inch * stretch
+    axis_row = ticks_h + label_h  # x ticks and "x (m)" / "time (s)"
+    if column:
+        legend_h, score_h, ylabel_w = 0.3, 0.8, 0.3
+        short_w = (width - gap) / 2
+        short_span = short_w * per_inch
+        score = (margin + ylabel_w, axis_row, width - ylabel_w, score_h)
+        short_bottom = axis_row + score_h + title_h + 0.06 + axis_row
+    else:
+        legend_h = 0.17
+        short_w = short_span / per_inch
+        short_bottom = axis_row
+        left = margin + 2 * (short_w + gap) + 0.22
+        score = (left, axis_row, fig_w - left - margin, strip)
+    shorts = [
+        (margin + index * (short_w + gap), short_bottom, short_w, strip)
+        for index in range(2)
+    ]
+    wide_bottom = short_bottom + strip + title_h + 0.06 + ticks_h
+    height = wide_bottom + strip + title_h + legend_h + margin
+    wide = (margin, wide_bottom, width, strip)
+    legend_columns = 4 if column else 8
+    return fig_w, height, [wide, *shorts, score], short_span, legend_columns
+
+
+def plot_lane_paper(
+    panels,
+    *,
+    dt,
+    alpha=None,
+    events=(),
+    column=False,
+    save_path=None,
+    show=False,
+    span=None,
+    short_span=40.0,
+    start=-5.0,
+    stretch=None,
+    show_uncertainty=False,
+):
+    """Paper figure: one wide frame, two short frames, score panel.
+
+    Two-column (IEEE text width) or one-column (`column=True`) layout; see
+    `_paper_layout`. Every frame shares one metres-per-inch scale along x;
+    the road is drawn `stretch` times taller than true scale so the cars
+    stay readable. Each frame shows faded ego cars at earlier times, tagged
+    with the time. The last panel is each run's per-window lower score.
+    Font is DejaVu Sans, embedded as TrueType.
+
+    Args:
+        panels: (title, MPCResult, environment, step, ghost times [s],
+            score label) for the wide frame, then up to two short frames.
+        dt: Step length in seconds.
+        alpha: Score threshold drawn in the score panel, or None.
+        events: (time, text) pairs marked in the score panel.
+        column: One-column layout.
+        save_path: Output path; a PDF and a 300 dpi PNG are written.
+        show: Display the figure.
+        span: Metres across the wide frame (default 130, one-column 105).
+        short_span: Metres in each short frame (two-column only).
+        start: Left edge of every frame in metres.
+        stretch: How much taller than true scale the road is drawn
+            (default 1.8, one-column 2.2).
+        show_uncertainty: Also draw the plan's predicted 95% region.
+
+    Returns:
+        (figure, axes): the frame axes in panel order, then the score axes.
+    """
+    if not 1 <= len(panels) <= 3:
+        raise ValueError("plot_lane_paper needs one wide and up to two short")
+    if span is None:
+        span = 105.0 if column else 130.0
+    if stretch is None:
+        stretch = 2.2 if column else 1.8
+    road = panels[0][2].metadata["road"]
+    ylim = (road["y_min"] - 0.4, road["y_max"] + 0.4)
+    fig_w, height, rects, short_span, ncol = _paper_layout(
+        column, ylim[1] - ylim[0], span, short_span, stretch
+    )
+    style = {
+        "mathtext.fontset": "dejavusans",
+        "font.family": "DejaVu Sans",
+        # Embed TrueType, not Type 3, fonts (IEEE PDF checks reject Type 3).
+        "pdf.fonttype": 42,
     }
+    with plt.rc_context(style):
+        fig = plt.figure(figsize=(fig_w, height))
+
+        def axes_at(left, bottom, size, tall):
+            return fig.add_axes(
+                [left / fig_w, bottom / height, size / fig_w, tall / height]
+            )
+
+        axes = []
+        for index, panel in enumerate(panels):
+            title, result, env, step, ghosts, _label = panel
+            ax = axes_at(*rects[index])
+            xlim = (start, start + (short_span if index else span))
+            _frame_strip(
+                ax,
+                title,
+                result,
+                env,
+                step,
+                xlim,
+                ylim,
+                stretch,
+                show_uncertainty,
+            )
+            _ego_ghosts(ax, result, env, step, ghosts, dt, stretch)
+            if index:
+                ax.set_xlabel("x (m)", fontsize=PAPER_FONT, labelpad=0)
+            axes.append(ax)
+        axes[0].set_xticks(np.arange(0, start + span, 20))
+        score = axes_at(*rects[3])
+        letter = chr(ord("a") + len(panels))
+        _score_panel(
+            score,
+            panels,
+            dt,
+            alpha,
+            events,
+            f"({letter}) Exact lower score per window",
+        )
+        axes.append(score)
+        handles = {}
+        for ax in axes[:-1]:
+            for handle, label in zip(*ax.get_legend_handles_labels()):
+                handles.setdefault(label, handle)
+        fig.legend(
+            handles.values(),
+            handles.keys(),
+            loc="upper center",
+            ncol=ncol,
+            fontsize=PAPER_FONT - 1,
+            frameon=False,
+            bbox_to_anchor=(0.5, 1.0),
+            handlelength=1.4,
+            columnspacing=1.0,
+            labelspacing=0.3,
+        )
+        if save_path is not None:
+            stem = Path(save_path).with_suffix("")
+            stem.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(stem.with_suffix(".pdf"))
+            fig.savefig(stem.with_suffix(".png"), dpi=300)
+        if show and matplotlib.get_backend().lower() != "agg":
+            plt.show(block=True)
+        plt.close(fig)
+    return fig, axes

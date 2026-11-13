@@ -170,41 +170,62 @@ def lane_rollout(
     speed_bounds,
     accel_bounds,
 ):
-    """Predict ego and constant-velocity traffic with physical controls."""
+    """Predict ego and constant-velocity traffic with physical controls.
+
+    Covariances and traffic do not depend on the controls, so they are
+    predicted once here for the longest window and sliced per rollout.
+    """
     traffic_a = dynamics.A
+    covariances, traffic_means, traffic_covariances = [], [], []
+    covariance, traffic_m, traffic_c = ego_cov, traffic_mean, traffic_cov
+    cached_steps = 0
+
+    def extend(steps):
+        """Predict the control-free parts out to `steps` steps."""
+        nonlocal covariance, traffic_m, traffic_c, cached_steps
+        if not covariances:
+            covariances.append(ego_cov)
+            traffic_means.append(traffic_mean)
+            traffic_covariances.append(traffic_cov)
+        while cached_steps < steps:
+            covariance = dynamics.A @ covariance @ dynamics.A.T + dynamics.Q
+            traffic_m = traffic_m @ traffic_a.T
+            traffic_c = traffic_a @ traffic_c @ traffic_a.T + traffic_q
+            covariances.append(covariance)
+            traffic_means.append(traffic_m)
+            traffic_covariances.append(traffic_c)
+            cached_steps += 1
 
     def rollout(parameters):
-        means, covariances = [ego_mean], [ego_cov]
-        traffic_means, traffic_covariances = [traffic_mean], [traffic_cov]
+        steps = len(parameters)
+        extend(steps)
+        means = [ego_mean]
+        # tanh and the lateral clamp act on each step alone: do all at once.
+        proposed = dynamics.bound_control(parameters)
+        lateral = proposed[:, 1].clamp(*accel_bounds[1])
         applied = []
-        for raw in parameters:
-            proposed = dynamics.bound_control(raw)
+        for k in range(steps):
+            # The longitudinal limit keeps the next speed within bounds, so
+            # it depends on the speed reached so far.
             speed = means[-1][2]
-            lower = torch.maximum(
-                speed.new_tensor(accel_bounds[0][0]),
-                (speed_bounds[0] - speed) / dynamics.dt,
+            lower = torch.clamp(
+                (speed_bounds[0] - speed) / dynamics.dt, min=accel_bounds[0][0]
             )
-            upper = torch.minimum(
-                speed.new_tensor(accel_bounds[0][1]),
-                (speed_bounds[1] - speed) / dynamics.dt,
+            upper = torch.clamp(
+                (speed_bounds[1] - speed) / dynamics.dt, max=accel_bounds[0][1]
             )
-            longitudinal = torch.clamp(proposed[0], min=lower, max=upper)
-            lateral = proposed[1].clamp(*accel_bounds[1])
-            control = torch.stack((longitudinal, lateral))
+            longitudinal = torch.clamp(proposed[k, 0], min=lower, max=upper)
+            control = torch.stack((longitudinal, lateral[k]))
             applied.append(control)
-            mean, covariance = dynamics.step(
-                means[-1], covariances[-1], control
-            )
-            means.append(mean)
-            covariances.append(covariance)
-            traffic_means.append(traffic_means[-1] @ traffic_a.T)
-            traffic_covariances.append(
-                traffic_a @ traffic_covariances[-1] @ traffic_a.T + traffic_q
-            )
+            means.append(dynamics.A @ means[-1] + dynamics.B @ control)
         mean_trace = torch.stack(means).unsqueeze(0)
-        cov_trace = torch.stack(covariances).unsqueeze(0)
-        traffic_mean_trace = torch.stack(traffic_means).unsqueeze(0)
-        traffic_cov_trace = torch.stack(traffic_covariances).unsqueeze(0)
+        cov_trace = torch.stack(covariances[: steps + 1]).unsqueeze(0)
+        traffic_mean_trace = torch.stack(traffic_means[: steps + 1]).unsqueeze(
+            0
+        )
+        traffic_cov_trace = torch.stack(
+            traffic_covariances[: steps + 1]
+        ).unsqueeze(0)
         controls = torch.stack(applied)
         return BeliefRollout(
             LaneBeliefTrajectory(
