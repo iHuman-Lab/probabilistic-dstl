@@ -1,0 +1,151 @@
+{
+  "checks": [
+    "All three smoothing values, numerical bounds and eleven derivatives match the analytic rule; source/autograd comparison is saved in smoothing_values.json.",
+    "Exact predicate probability is contained in every non-exact repo interval.",
+    "Register shift, insertion, min and max match the supplied teaching intervals.",
+    "All eight solves contain initial theta and all 600 hook-recorded updates; saved controls and complete trajectories reproduce double-integrator dynamics.",
+    "All six Monte Carlo confidence intervals match their 5000-rollout counts; selected controls and paths belong to the recorded solves.",
+    "Every MP4 fully decodes as 1920\u00d71080 H.264, is below 15 seconds and 20 MB, and ends on the exported final still; every stage still exists."
+  ],
+  "videos": {
+    "smoothing_window.mp4": {
+      "codec": "h264",
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": 24.0,
+      "frames": 215,
+      "duration_s": 8.958333333333334,
+      "bytes": 137774,
+      "final_frame_mean_absolute_error": 0.8038398598251029
+    },
+    "register.mp4": {
+      "codec": "h264",
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": 24.0,
+      "frames": 324,
+      "duration_s": 13.5,
+      "bytes": 212250,
+      "final_frame_mean_absolute_error": 0.24141042952674896
+    },
+    "reach_avoid_optimizer.mp4": {
+      "codec": "h264",
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": 24.0,
+      "frames": 301,
+      "duration_s": 12.541666666666666,
+      "bytes": 231318,
+      "final_frame_mean_absolute_error": 0.1442898019547325
+    }
+  },
+  "png_dimensions": {
+    "predicate_bounds.png": [
+      2000,
+      780
+    ],
+    "reach_avoid_optimizer_final.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step1.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step2.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step3.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step4.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step5.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step6.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_optimizer_step7.png": [
+      1920,
+      1080
+    ],
+    "reach_avoid_paths.png": [
+      1920,
+      1080
+    ],
+    "register_final.png": [
+      1920,
+      1080
+    ],
+    "register_step1.png": [
+      1920,
+      1080
+    ],
+    "register_step2.png": [
+      1920,
+      1080
+    ],
+    "register_step3.png": [
+      1920,
+      1080
+    ],
+    "register_step4.png": [
+      1920,
+      1080
+    ],
+    "register_step5.png": [
+      1920,
+      1080
+    ],
+    "register_step6.png": [
+      1920,
+      1080
+    ],
+    "register_step7.png": [
+      1920,
+      1080
+    ],
+    "register_step8.png": [
+      1920,
+      1080
+    ],
+    "smoothing_window_final.png": [
+      1920,
+      1080
+    ],
+    "smoothing_window_step1.png": [
+      1920,
+      1080
+    ],
+    "smoothing_window_step2.png": [
+      1920,
+      1080
+    ],
+    "smoothing_window_step3.png": [
+      1920,
+      1080
+    ],
+    "smoothing_window_step4.png": [
+      1920,
+      1080
+    ],
+    "smoothing_window_step5.png": [
+      1920,
+      1080
+    ]
+  },
+  "source_commit": "12b3bd7987faab130ebcf73120aeddbf77f17085"
+}

@@ -1,0 +1,374 @@
+[
+  {
+    "file": ".gitignore",
+    "description": "Exclude Python caches and retain the console run log",
+    "bytes": 34,
+    "sha256": "26f77c35f7b796a404ea853c849e792d5b7648d0052f5ea49712cf915f6bcd47"
+  },
+  {
+    "file": "INVENTORY.md",
+    "description": "One row for every deliverable file",
+    "bytes": 7281,
+    "sha256": "38834404427ce23993809538408bd9953471ea351632529ceaf31fb6dec8b68b"
+  },
+  {
+    "file": "README.md",
+    "description": "Report, usage, results and material limitations",
+    "bytes": 9254,
+    "sha256": "009bcf57eebb573108f1f2b2b65628f583f7a3a4712f8cd46b14edd71dcbbd40"
+  },
+  {
+    "file": "Rubik-Bold.ttf",
+    "description": "Rubik weight 700 static instance for headings",
+    "bytes": 212300,
+    "sha256": "2cdcee31bb52b3e77cfd2f93963c73e1e989ccae8d24c1b92542f311a215f8c1"
+  },
+  {
+    "file": "Rubik-LICENSE.txt",
+    "description": "SIL Open Font License and Rubik copyright notice",
+    "bytes": 4384,
+    "sha256": "472cbe7c25441df63e9c7864b43eb3c0f4b3df950c66a76224e6cfe1eae843fb"
+  },
+  {
+    "file": "Rubik-Regular.ttf",
+    "description": "Rubik weight 400 static instance for all ordinary text",
+    "bytes": 212228,
+    "sha256": "822922be9600a7b458be4bf02ad8b9730f275903f713b3c9cbf93d091d046a53"
+  },
+  {
+    "file": "Rubik.ttf",
+    "description": "Original Google Fonts Rubik variable font used to derive the static instances",
+    "bytes": 359804,
+    "sha256": "1b3a7437ba2af80e465e773ed60c5036d1ba6ace492d89046dbcf18fb31e4e88"
+  },
+  {
+    "file": "build_report.py",
+    "description": "Rebuild this report and inventories from delivered data",
+    "bytes": 19844,
+    "sha256": "9e18191ee6dd1c26a9dad3b86686283686734a9c3617e994b199158315c002db"
+  },
+  {
+    "file": "environment.json",
+    "description": "Versions used for this run and rendering",
+    "bytes": 193,
+    "sha256": "d6238c7ef892a72a3df183bfa651e94090a706eab44655f97b6124cd954552fb"
+  },
+  {
+    "file": "manifest.json",
+    "description": "Per-file descriptions, byte sizes and SHA-256 digests (self-digest omitted)",
+    "bytes": null,
+    "sha256": null
+  },
+  {
+    "file": "numeric_inventory.json",
+    "description": "Map every on-screen number to its exact input, calculation or run artifact",
+    "bytes": 8165,
+    "sha256": "0d84a1a3bed9a7416a531110f27be12d84693d253370e4e40d61315bdf72c327"
+  },
+  {
+    "file": "predicate_bounds.json",
+    "description": "Actual STLCG/high belief from Task E, times, geometry, exact probabilities and repo bounds",
+    "bytes": 15530,
+    "sha256": "805fcfafb4f1513f27c5f9a57105a45fc90bf52feb0ccd287622944ed5134eca"
+  },
+  {
+    "file": "predicate_bounds.png",
+    "description": "Non-exact OutsideRectangle intervals and exact Gaussian probability",
+    "bytes": 97675,
+    "sha256": "41b55d7ce6c5f4af0ec6047b810ed8ace943e5e22ab06f4199aa9629559c0150"
+  },
+  {
+    "file": "reach_avoid_iterates_pdstl_high_around.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: pdstl_high_around",
+    "bytes": 1058912,
+    "sha256": "61cbdc435f178989484ae30082f27a9ce585d18c5f5798febd882c3565dc271f"
+  },
+  {
+    "file": "reach_avoid_iterates_pdstl_high_slit.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: pdstl_high_slit",
+    "bytes": 1057879,
+    "sha256": "3634d4426b8a5d5fdbf5622d6dd8f5745023e9a9c917a3a34f347e5ca6d1d3a7"
+  },
+  {
+    "file": "reach_avoid_iterates_pdstl_low_around.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: pdstl_low_around",
+    "bytes": 1043590,
+    "sha256": "e7cc82c2a0529575f3583539e6f8c5deb3f8df55980e99562c98185139dd08c7"
+  },
+  {
+    "file": "reach_avoid_iterates_pdstl_low_slit.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: pdstl_low_slit",
+    "bytes": 1032379,
+    "sha256": "855401fe82cc32e64c21a20ebfd414a22275c1bcc343bf76bb8c8c0b3b2bbdd7"
+  },
+  {
+    "file": "reach_avoid_iterates_pdstl_medium_around.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: pdstl_medium_around",
+    "bytes": 1030392,
+    "sha256": "12b8f1134aa42ed0437c3481e15bc76ead94509135747c9f45e45d30658e521c"
+  },
+  {
+    "file": "reach_avoid_iterates_pdstl_medium_slit.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: pdstl_medium_slit",
+    "bytes": 1050337,
+    "sha256": "76a0249c8dfd73357221f8250cb8ec4469d5ad2de69fc0af363bb63c23b42b06"
+  },
+  {
+    "file": "reach_avoid_iterates_stlcg_nominal_around.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: stlcg_nominal_around",
+    "bytes": 1057759,
+    "sha256": "efdf6a8fdea7b6810c0abd269b2b8c5ffc40b97cebf677bf6bcd39be576f5524"
+  },
+  {
+    "file": "reach_avoid_iterates_stlcg_nominal_slit.npz",
+    "description": "Initial parameters and 600 exact hook-recorded iterates, controls, full state paths, loss, beta, selected iteration: stlcg_nominal_slit",
+    "bytes": 1074229,
+    "sha256": "7f1506156dd8c0baeb43cedeaa1e7df705661f4fef05f392dbac3b8275aacb10"
+  },
+  {
+    "file": "reach_avoid_monte_carlo.csv",
+    "description": "Counts, empirical satisfaction, confidence limits and separate planned/evaluation scores",
+    "bytes": 853,
+    "sha256": "bc6d22b94b7c431ce5006fee79c6e37dbb889982917d9ba11e4c5d81c6ebe8b5"
+  },
+  {
+    "file": "reach_avoid_monte_carlo.md",
+    "description": "Readable Monte Carlo results table",
+    "bytes": 749,
+    "sha256": "9ad674f72e0b3ed7a21d748ab5559e59664d34c6110dd4e09346a4272cc8386a"
+  },
+  {
+    "file": "reach_avoid_optimizer.mp4",
+    "description": "High-noise pdSTL optimizer replay from recorded iterations",
+    "bytes": 231318,
+    "sha256": "e20aa604a28e9a8320ba6202c46af0dd6f114a4b7bbbad3fea454354f48700af"
+  },
+  {
+    "file": "reach_avoid_optimizer_final.png",
+    "description": "Final optimizer replay frame, identical to step 7",
+    "bytes": 146951,
+    "sha256": "8b578a3acfd53cfa10c6330da5f9009c67a623338a52a9c6d539f4ad74463c31"
+  },
+  {
+    "file": "reach_avoid_optimizer_step1.png",
+    "description": "Initial trajectory",
+    "bytes": 146019,
+    "sha256": "663f823c86f69046901f10a2836828cac24a86929ad0fef0b664a8a4c256de8c"
+  },
+  {
+    "file": "reach_avoid_optimizer_step2.png",
+    "description": "Trajectory after 50 updates",
+    "bytes": 148879,
+    "sha256": "9f6d508d23dc4aaf80a14d8dcfa818f2231d2d59ec6daa14957117c66e10bb60"
+  },
+  {
+    "file": "reach_avoid_optimizer_step3.png",
+    "description": "Trajectory after 150 updates",
+    "bytes": 151219,
+    "sha256": "4b310fe8fc47517282281e4e68611ef0caba3552c54682a7049825a7ed90a5da"
+  },
+  {
+    "file": "reach_avoid_optimizer_step4.png",
+    "description": "Trajectory after 300 updates",
+    "bytes": 149604,
+    "sha256": "5069b70df87e9589c44ad8be169405a85101d6251fe452e9effa6d02ccfa5f04"
+  },
+  {
+    "file": "reach_avoid_optimizer_step5.png",
+    "description": "Trajectory after 450 updates",
+    "bytes": 149619,
+    "sha256": "017b5970befe9dd20eb52dcb7b054916cfd5f93d9b21c49fc31894e37ac71bec"
+  },
+  {
+    "file": "reach_avoid_optimizer_step6.png",
+    "description": "Terminal trajectory after 600 updates",
+    "bytes": 148669,
+    "sha256": "4454517ac76f068533f3ca8276239d16e4587ede74d0566a2bffda7f8f3f86e4"
+  },
+  {
+    "file": "reach_avoid_optimizer_step7.png",
+    "description": "Selected output trajectory",
+    "bytes": 146951,
+    "sha256": "8b578a3acfd53cfa10c6330da5f9009c67a623338a52a9c6d539f4ad74463c31"
+  },
+  {
+    "file": "reach_avoid_paths.pdf",
+    "description": "Vector/PDF copy of the reach-avoid figure",
+    "bytes": 68612,
+    "sha256": "9757a5da41953dd5e4e123a35931b65d1beca520e4f0a826c907879808cba772"
+  },
+  {
+    "file": "reach_avoid_paths.png",
+    "description": "Selected STLCG and pdSTL paths with pointwise 95% position ellipses at all noise levels",
+    "bytes": 223223,
+    "sha256": "4778a3a8c942167ba0330f344c1d99dc3c64365cf77a247917d7f6980790107b"
+  },
+  {
+    "file": "reach_avoid_run.json",
+    "description": "Single-run provenance, input source hashes, config, candidates, selected plans, full means and covariances",
+    "bytes": 284693,
+    "sha256": "52d6c99458965f3f59b4154e16a25226a8e975c1e45b5ecb2374c9609740271e"
+  },
+  {
+    "file": "reach_avoid_run.log",
+    "description": "Console record of the one experiment run",
+    "bytes": 2633,
+    "sha256": "e72e0866fa5fda2e26bcc5b6803b3929013e1aab7fa34567eb9bce3300ad6910"
+  },
+  {
+    "file": "register.mp4",
+    "description": "Moving-row shift register and temporal min/max readouts",
+    "bytes": 212250,
+    "sha256": "91d5e7a949b29f881fcea85a5695f281ce3ab5a8bd875980a58f03439b0e97e4"
+  },
+  {
+    "file": "register_final.png",
+    "description": "Final register frame, identical to step 8",
+    "bytes": 95993,
+    "sha256": "754b798ac3feaa52965a220a5f71432b3f2145570cc1bc2f7264330669d5fd88"
+  },
+  {
+    "file": "register_step1.png",
+    "description": "r3 has left upward",
+    "bytes": 77175,
+    "sha256": "5f699521196b1f625d46eb54d2e1e5f0e75df3a9d0599ab7ed1c6cd9a57407ef"
+  },
+  {
+    "file": "register_step2.png",
+    "description": "r2 and r1 shifted upward",
+    "bytes": 78053,
+    "sha256": "f1dda4c7de2ad67b87844a79aa169be33b22cf3749afdc927ae71e0f8285ab34"
+  },
+  {
+    "file": "register_step3.png",
+    "description": "r0 inserted",
+    "bytes": 77543,
+    "sha256": "8a529cea6f665c40f45963d09d104f6d5626a5a4d577843f41a3b172ae03c464"
+  },
+  {
+    "file": "register_step4.png",
+    "description": "Lower column minimum",
+    "bytes": 78331,
+    "sha256": "e5f9fd8cec53ade90edd9d19753b28e2d26ca8493046cca1fc23327b18a60b32"
+  },
+  {
+    "file": "register_step5.png",
+    "description": "Upper column minimum",
+    "bytes": 80578,
+    "sha256": "b8cdfb57a44c29a91fbf5527ef227bc50d045a9ea0972f8b63eb10d4340e5241"
+  },
+  {
+    "file": "register_step6.png",
+    "description": "Purple min interval",
+    "bytes": 87904,
+    "sha256": "8380289f09523dc21a9991e2716ecd57079b7f3df986a2a834812fcee5bdeec9"
+  },
+  {
+    "file": "register_step7.png",
+    "description": "Purple max interval",
+    "bytes": 85542,
+    "sha256": "b1c9ffa0f1b772eabde4a389e12752ff8009c0c003b01b62727c45c2f44ab9aa"
+  },
+  {
+    "file": "register_step8.png",
+    "description": "Affine recurrence and shift/insertion matrices",
+    "bytes": 95993,
+    "sha256": "754b798ac3feaa52965a220a5f71432b3f2145570cc1bc2f7264330669d5fd88"
+  },
+  {
+    "file": "render_media.py",
+    "description": "Render all teaching and experiment media",
+    "bytes": 26451,
+    "sha256": "9c46dcb5830613f260d8c7db7a4d72ad4a260917aca76bc0f3eedad5423e0fe7"
+  },
+  {
+    "file": "reproduce.py",
+    "description": "Archive the pinned source and recreate the run, media and validation",
+    "bytes": 1248,
+    "sha256": "1bd9503231061844c86737f56d0b708d3697387ecbcde8de7ec83e053df5b4b0"
+  },
+  {
+    "file": "requirements-media.txt",
+    "description": "Additional media encoder dependency",
+    "bytes": 73,
+    "sha256": "6bf79720249d4b7e9fc5a9c2003b79d5df46ce6ee23e08ebfc1b62bd6ca61af7"
+  },
+  {
+    "file": "run_reach_avoid.py",
+    "description": "Run unchanged source experiment with passive iteration recording",
+    "bytes": 8075,
+    "sha256": "b2c89eb86c176b538429e8497fd30f85f5f5071b070718dc340ff939bf7047ba"
+  },
+  {
+    "file": "smoothing_values.csv",
+    "description": "Full precision smin, outer bound and all eleven derivatives for each beta",
+    "bytes": 901,
+    "sha256": "1f80b48110b0584f75f6b8fdf8c2cfbbee1c3327876ceb861a3214a7e8f92434"
+  },
+  {
+    "file": "smoothing_values.json",
+    "description": "Teaching inputs, numeric table and repository/autograd comparisons",
+    "bytes": 2076,
+    "sha256": "48f8b116361e21624409cafa116ea2b72251a2b79cc3352ebbb29638c2a951ea"
+  },
+  {
+    "file": "smoothing_weights.md",
+    "description": "Readable derivative table for all three beta values",
+    "bytes": 936,
+    "sha256": "cae95eb658dab59f0d777be3c11b26dfb745aac8f47871644c257c9e93118bdf"
+  },
+  {
+    "file": "smoothing_window.mp4",
+    "description": "Five-stage smoothing time plot with pause holds",
+    "bytes": 137774,
+    "sha256": "2dfafc9fe14193090f5d702730fd2d4eef6abc69f68096ae009686fd1d6705e9"
+  },
+  {
+    "file": "smoothing_window_final.png",
+    "description": "Final smoothing frame, identical to step 5",
+    "bytes": 129845,
+    "sha256": "dc103acff52264290a16f170ea7ad9e3b724050425f8eb5fbd7f6419cf0667b0"
+  },
+  {
+    "file": "smoothing_window_step1.png",
+    "description": "Scores only",
+    "bytes": 117628,
+    "sha256": "b765f94deaf158bdb73a70ce538c955fd9e58c04a7b65c521a781d5c8d27716e"
+  },
+  {
+    "file": "smoothing_window_step2.png",
+    "description": "Hard minimum and derivative spike",
+    "bytes": 131285,
+    "sha256": "9d3b38936a95b3cfc38ebdeb48b51a097fc519fb810bfd364c9281364fbd538a"
+  },
+  {
+    "file": "smoothing_window_step3.png",
+    "description": "Smooth minimum and derivatives, beta 5",
+    "bytes": 129939,
+    "sha256": "72142deb503f4af0122f7218216030f49bc399c6bfbeea438d9583c877a368b4"
+  },
+  {
+    "file": "smoothing_window_step4.png",
+    "description": "Smooth minimum and derivatives, beta 20",
+    "bytes": 134108,
+    "sha256": "e8e15f45c8e914e1f63210d739d035d33fb877a3eed9e131a0181d6883e161fb"
+  },
+  {
+    "file": "smoothing_window_step5.png",
+    "description": "Smooth minimum and derivatives, beta 100",
+    "bytes": 129845,
+    "sha256": "dc103acff52264290a16f170ea7ad9e3b724050425f8eb5fbd7f6419cf0667b0"
+  },
+  {
+    "file": "validate_media.py",
+    "description": "Validate numerical data, all saved paths, and fully decoded H.264 videos",
+    "bytes": 6604,
+    "sha256": "449dd0d855df855954feffe0caf8e008c0a2d702f2f0d16147e56c6a8ed0d589"
+  },
+  {
+    "file": "validation.json",
+    "description": "Completed numerical/media checks and decoded video metadata",
+    "bytes": 3322,
+    "sha256": "4d2c915fd256a897d6eb3a38399bff1dc0f8b361f1e9f29e666eb074b6754ff9"
+  }
+]

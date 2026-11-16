@@ -1,0 +1,2 @@
+# Install in addition to the project dependencies.
+imageio-ffmpeg==0.8.1

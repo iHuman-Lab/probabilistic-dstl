@@ -1,0 +1,63 @@
+stlcg/None/slit: 100/600 updates
+stlcg/None/slit: 200/600 updates
+stlcg/None/slit: 300/600 updates
+stlcg/None/slit: 400/600 updates
+stlcg/None/slit: 500/600 updates
+stlcg/None/slit: 600/600 updates
+saved reach_avoid_iterates_stlcg_nominal_slit.npz; selected iterate 586
+stlcg/None/around: 100/600 updates
+stlcg/None/around: 200/600 updates
+stlcg/None/around: 300/600 updates
+stlcg/None/around: 400/600 updates
+stlcg/None/around: 500/600 updates
+stlcg/None/around: 600/600 updates
+saved reach_avoid_iterates_stlcg_nominal_around.npz; selected iterate 452
+stlcg     low    slit   success  97.2% [96.7, 97.6] score 0.931
+stlcg     medium slit   success  60.6% [59.2, 62.0] score 0.301
+stlcg     high   slit   success  31.6% [30.3, 32.9] score 0.000
+pdstl/low/slit: 100/600 updates
+pdstl/low/slit: 200/600 updates
+pdstl/low/slit: 300/600 updates
+pdstl/low/slit: 400/600 updates
+pdstl/low/slit: 500/600 updates
+pdstl/low/slit: 600/600 updates
+saved reach_avoid_iterates_pdstl_low_slit.npz; selected iterate 599
+pdstl/low/around: 100/600 updates
+pdstl/low/around: 200/600 updates
+pdstl/low/around: 300/600 updates
+pdstl/low/around: 400/600 updates
+pdstl/low/around: 500/600 updates
+pdstl/low/around: 600/600 updates
+saved reach_avoid_iterates_pdstl_low_around.npz; selected iterate 599
+pdstl/medium/slit: 100/600 updates
+pdstl/medium/slit: 200/600 updates
+pdstl/medium/slit: 300/600 updates
+pdstl/medium/slit: 400/600 updates
+pdstl/medium/slit: 500/600 updates
+pdstl/medium/slit: 600/600 updates
+saved reach_avoid_iterates_pdstl_medium_slit.npz; selected iterate 553
+pdstl/medium/around: 100/600 updates
+pdstl/medium/around: 200/600 updates
+pdstl/medium/around: 300/600 updates
+pdstl/medium/around: 400/600 updates
+pdstl/medium/around: 500/600 updates
+pdstl/medium/around: 600/600 updates
+saved reach_avoid_iterates_pdstl_medium_around.npz; selected iterate 599
+pdstl/high/slit: 100/600 updates
+pdstl/high/slit: 200/600 updates
+pdstl/high/slit: 300/600 updates
+pdstl/high/slit: 400/600 updates
+pdstl/high/slit: 500/600 updates
+pdstl/high/slit: 600/600 updates
+saved reach_avoid_iterates_pdstl_high_slit.npz; selected iterate 599
+pdstl/high/around: 100/600 updates
+pdstl/high/around: 200/600 updates
+pdstl/high/around: 300/600 updates
+pdstl/high/around: 400/600 updates
+pdstl/high/around: 500/600 updates
+pdstl/high/around: 600/600 updates
+saved reach_avoid_iterates_pdstl_high_around.npz; selected iterate 599
+pdstl     low    slit   success 100.0% [99.9, 100.0] score 1.000
+pdstl     medium around success  99.9% [99.8, 100.0] score 0.998
+pdstl     high   around success  95.7% [95.1, 96.2] score 0.785
+Completed one run in 140.0 seconds

@@ -1,0 +1,10 @@
+{
+  "torch": "2.7.0+cu128",
+  "numpy": "2.4.6",
+  "scipy": "1.18.0",
+  "matplotlib": "3.11.0",
+  "Pillow": "12.2.0",
+  "PyYAML": "6.0.3",
+  "imageio-ffmpeg": "0.8.1",
+  "fonttools": "4.63.0"
+}
